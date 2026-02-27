@@ -1,0 +1,64 @@
+{
+  "configVersion": "v3",
+  "app": {
+    "appId": 20002,
+    "appName": "Pokus",
+    "appType": "app",
+    "version": {
+      "code": 1,
+      "name": "1.0.0"
+    },
+    "icon": "icon.png",
+    "vender": "anh_v_ng",
+    "description": "Gamified ADHD Focus Timer"
+  },
+  "permissions": [
+    "data:os.device.info",
+    "device:os.local_storage",
+    "device:os.alarm",
+    "device:os.notification",
+    "device:os.bg_service"
+  ],
+  "runtime": {
+    "apiVersion": {
+      "compatible": "3.6",
+      "target": "3.7",
+      "minVersion": "3.6"
+    }
+  },
+  "targets": {
+    "amazfit-balance": {
+      "module": {
+        "page": {
+          "pages": [
+            "pages/home/index",
+            "pages/menu/index",
+            "pages/timer/index",
+            "pages/break/index",
+            "pages/encounter/index",
+            "pages/result/index",
+            "pages/stats/index",
+            "pages/pokedex/index",
+            "pages/pokedex-detail/index",
+            "pages/settings/index",
+            "pages/confirm/index",
+            "pages/help/index"
+          ]
+        },
+        "app-service": {
+          "services": [
+            "app-service/nudge-service",
+            "app-service/timer-service"
+          ]
+        }
+      },
+      "platforms": [
+        { "name": "amazfit-balance", "deviceSource": 8519936 },
+        { "name": "amazfit-balance-intl", "deviceSource": 8519937 },
+        { "name": "amazfit-balance-intl2", "deviceSource": 8519939 }
+      ],
+      "designWidth": 480
+    }
+  },
+  "defaultLanguage": "en-US"
+}
