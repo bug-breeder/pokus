@@ -4,9 +4,9 @@ Follow these steps in order:
 
 ## 1. Identify the PR
 
-If $ARGUMENTS is a PR number, run: `gh pr view $ARGUMENTS --patch`
-If $ARGUMENTS is empty, run: `gh pr view --patch` (uses current branch's open PR)
-Also run `gh pr view $ARGUMENTS` (without --patch) to get the title, description, and any comments.
+If $ARGUMENTS is a PR number, run: `gh pr diff $ARGUMENTS` to get the unified diff.
+If $ARGUMENTS is empty, run: `gh pr diff` (uses current branch's open PR).
+Also run `gh pr view $ARGUMENTS` (without diff) to get the title, description, and any comments.
 
 ## 2. Run automated checks
 
