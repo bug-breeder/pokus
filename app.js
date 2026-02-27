@@ -6,14 +6,14 @@
 App({
   globalData: {
     sessionSeconds: 0,
-    earnedCoins: 0
+    earnedCoins: 0,
   },
 
   onCreate() {
-    console.log('[App] onCreate')
+    console.log('[App] onCreate');
   },
 
   onDestroy() {
-    console.log('[App] onDestroy')
-  }
-})
+    console.log('[App] onDestroy');
+  },
+});

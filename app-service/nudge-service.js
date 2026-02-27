@@ -1,9 +1,9 @@
 /**
  * Nudge Service (Alarm-Based)
- * 
+ *
  * Triggered by alarm API every nudge interval (default 5 min).
  * After vibrating, schedules the NEXT alarm to chain nudges.
- * 
+ *
  * Flow:
  * 1. Timer page schedules first alarm when session starts
  * 2. Alarm fires -> this service runs
@@ -11,32 +11,32 @@
  * 4. Timer page cancels alarm when session ends
  */
 
-import { log as Logger } from '@zos/utils'
-import { Vibrator } from '@zos/sensor'
-import { LocalStorage } from '@zos/storage'
-import { set as setAlarm } from '@zos/alarm'
+import { log as Logger } from '@zos/utils';
+import { Vibrator } from '@zos/sensor';
+import { LocalStorage } from '@zos/storage';
+import { set as setAlarm } from '@zos/alarm';
 
-const logger = Logger.getLogger('nudge-service')
-const storage = new LocalStorage()
+const logger = Logger.getLogger('nudge-service');
+const storage = new LocalStorage();
 
 // Storage keys (must match storage.js)
-const TIMER_STATE_KEY = 'pokus_timer_state'
-const DEV_MODE_KEY = 'pokus_dev_mode'
-const NUDGE_ENABLED_KEY = 'pokus_nudge_enabled'
-const NUDGE_INTERVAL_KEY = 'pokus_nudge_interval'
-const NUDGE_ALARM_ID_KEY = 'pokus_nudge_alarm'
+const TIMER_STATE_KEY = 'pokus_timer_state';
+const DEV_MODE_KEY = 'pokus_dev_mode';
+const NUDGE_ENABLED_KEY = 'pokus_nudge_enabled';
+const NUDGE_INTERVAL_KEY = 'pokus_nudge_interval';
+const NUDGE_ALARM_ID_KEY = 'pokus_nudge_alarm';
 
 // Default settings
-const DEFAULT_NUDGE_INTERVAL = 5 // minutes
+const DEFAULT_NUDGE_INTERVAL = 5; // minutes
 
 /**
  * Check if developer mode is enabled
  */
 function isDevMode() {
   try {
-    return storage.getItem(DEV_MODE_KEY, false) === true
-  } catch (e) {
-    return false
+    return storage.getItem(DEV_MODE_KEY, false) === true;
+  } catch {
+    return false;
   }
 }
 
@@ -46,12 +46,12 @@ function isDevMode() {
 function getKey(baseKey) {
   // Settings are shared across modes
   if (baseKey.includes('_nudge_') || baseKey === DEV_MODE_KEY) {
-    return baseKey
+    return baseKey;
   }
   if (isDevMode()) {
-    return baseKey.replace('pokus_', 'pokus_dev_')
+    return baseKey.replace('pokus_', 'pokus_dev_');
   }
-  return baseKey
+  return baseKey;
 }
 
 /**
@@ -59,12 +59,12 @@ function getKey(baseKey) {
  */
 function isSessionActive() {
   try {
-    const key = getKey(TIMER_STATE_KEY)
-    const state = storage.getItem(key, null)
-    return !!(state && state.startTime && state.isRunning !== false)
+    const key = getKey(TIMER_STATE_KEY);
+    const state = storage.getItem(key, null);
+    return !!(state && state.startTime && state.isRunning !== false);
   } catch (e) {
-    logger.log('isSessionActive error:', e)
-    return false
+    logger.log('isSessionActive error:', e);
+    return false;
   }
 }
 
@@ -73,9 +73,9 @@ function isSessionActive() {
  */
 function isNudgeEnabled() {
   try {
-    return storage.getItem(NUDGE_ENABLED_KEY, true) !== false
-  } catch (e) {
-    return true
+    return storage.getItem(NUDGE_ENABLED_KEY, true) !== false;
+  } catch {
+    return true;
   }
 }
 
@@ -84,9 +84,9 @@ function isNudgeEnabled() {
  */
 function getNudgeInterval() {
   try {
-    return storage.getItem(NUDGE_INTERVAL_KEY, DEFAULT_NUDGE_INTERVAL) || DEFAULT_NUDGE_INTERVAL
-  } catch (e) {
-    return DEFAULT_NUDGE_INTERVAL
+    return storage.getItem(NUDGE_INTERVAL_KEY, DEFAULT_NUDGE_INTERVAL) || DEFAULT_NUDGE_INTERVAL;
+  } catch {
+    return DEFAULT_NUDGE_INTERVAL;
   }
 }
 
@@ -95,10 +95,10 @@ function getNudgeInterval() {
  */
 function saveAlarmId(alarmId) {
   try {
-    storage.setItem(NUDGE_ALARM_ID_KEY, alarmId)
-    logger.log('Saved alarm ID:', alarmId)
+    storage.setItem(NUDGE_ALARM_ID_KEY, alarmId);
+    logger.log('Saved alarm ID:', alarmId);
   } catch (e) {
-    logger.log('saveAlarmId error:', e)
+    logger.log('saveAlarmId error:', e);
   }
 }
 
@@ -107,18 +107,18 @@ function saveAlarmId(alarmId) {
  */
 function scheduleNextNudge() {
   try {
-    const intervalMinutes = getNudgeInterval()
-    const delaySeconds = intervalMinutes * 60
-    
+    const intervalMinutes = getNudgeInterval();
+    const delaySeconds = intervalMinutes * 60;
+
     const alarmId = setAlarm({
       url: 'app-service/nudge-service',
-      delay: delaySeconds
-    })
-    
-    saveAlarmId(alarmId)
-    logger.log('Scheduled next nudge in', intervalMinutes, 'minutes, alarm ID:', alarmId)
+      delay: delaySeconds,
+    });
+
+    saveAlarmId(alarmId);
+    logger.log('Scheduled next nudge in', intervalMinutes, 'minutes, alarm ID:', alarmId);
   } catch (e) {
-    logger.log('scheduleNextNudge error:', e)
+    logger.log('scheduleNextNudge error:', e);
   }
 }
 
@@ -128,50 +128,50 @@ function scheduleNextNudge() {
  */
 function vibrateNudge() {
   try {
-    const vibrator = new Vibrator()
-    const type = vibrator.getType()
+    const vibrator = new Vibrator();
+    const type = vibrator.getType();
     // Pattern-based vibration auto-stops after completion
     vibrator.start([
       { type: type.URGENT, duration: 300 },
       { type: type.URGENT, duration: 300 },
       { type: type.URGENT, duration: 300 },
       { type: type.URGENT, duration: 300 },
-      { type: type.URGENT, duration: 300 }
-    ])
-    logger.log('Vibration nudge sent')
+      { type: type.URGENT, duration: 300 },
+    ]);
+    logger.log('Vibration nudge sent');
   } catch (e) {
-    logger.log('vibrateNudge error:', e)
+    logger.log('vibrateNudge error:', e);
   }
 }
 
 AppService({
   onInit(params) {
-    logger.log('Nudge service triggered', params || '')
-    
+    logger.log('Nudge service triggered', params || '');
+
     // Check if session is still active
     if (!isSessionActive()) {
-      logger.log('No active session, skipping nudge')
-      return
+      logger.log('No active session, skipping nudge');
+      return;
     }
-    
+
     // Check if nudges are enabled
     if (!isNudgeEnabled()) {
-      logger.log('Nudges disabled, skipping')
+      logger.log('Nudges disabled, skipping');
       // Still schedule next alarm in case user re-enables
-      scheduleNextNudge()
-      return
+      scheduleNextNudge();
+      return;
     }
-    
+
     // Vibrate!
-    vibrateNudge()
-    
+    vibrateNudge();
+
     // Schedule the next nudge alarm (chain the alarms)
-    scheduleNextNudge()
-    
+    scheduleNextNudge();
+
     // Single execution: service exits automatically after onInit completes
   },
 
   onDestroy() {
-    logger.log('Nudge service exiting')
-  }
-})
+    logger.log('Nudge service exiting');
+  },
+});
