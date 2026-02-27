@@ -3,9 +3,9 @@
  * Persistent data storage using ZeppOS LocalStorage
  */
 
-import { LocalStorage } from '@zos/storage'
+import { LocalStorage } from '@zos/storage';
 
-const storage = new LocalStorage()
+const storage = new LocalStorage();
 
 // Storage keys (base keys - will be prefixed with 'dev_' in dev mode for data keys)
 const KEYS = {
@@ -22,9 +22,9 @@ const KEYS = {
   SETTINGS_FOCUS_GOAL: 'pokus_focus_goal',
   SETTINGS_NUDGE_ENABLED: 'pokus_nudge_enabled',
   SETTINGS_NUDGE_INTERVAL: 'pokus_nudge_interval',
-  SETTINGS_FLOW_RATIO: 'pokus_flow_ratio',  // Flowmodoro ratio (3, 4, 5, 6)
-  SETTINGS_DEV_MODE: 'pokus_dev_mode'  // Dev mode toggle (shared)
-}
+  SETTINGS_FLOW_RATIO: 'pokus_flow_ratio', // Flowmodoro ratio (3, 4, 5, 6)
+  SETTINGS_DEV_MODE: 'pokus_dev_mode', // Dev mode toggle (shared)
+};
 
 // Keys that should NOT be prefixed in dev mode (settings are shared)
 const SHARED_KEYS = [
@@ -32,8 +32,8 @@ const SHARED_KEYS = [
   KEYS.SETTINGS_NUDGE_ENABLED,
   KEYS.SETTINGS_NUDGE_INTERVAL,
   KEYS.SETTINGS_FLOW_RATIO,
-  KEYS.SETTINGS_DEV_MODE
-]
+  KEYS.SETTINGS_DEV_MODE,
+];
 
 // =============================================================================
 // DEVELOPER MODE
@@ -45,11 +45,11 @@ const SHARED_KEYS = [
  */
 export function isDevMode() {
   try {
-    const val = storage.getItem(KEYS.SETTINGS_DEV_MODE, false)
-    return typeof val === 'boolean' ? val : false
+    const val = storage.getItem(KEYS.SETTINGS_DEV_MODE, false);
+    return typeof val === 'boolean' ? val : false;
   } catch (e) {
-    console.log('isDevMode error:', e)
-    return false
+    console.log('isDevMode error:', e);
+    return false;
   }
 }
 
@@ -59,10 +59,10 @@ export function isDevMode() {
  */
 export function setDevMode(enabled) {
   try {
-    storage.setItem(KEYS.SETTINGS_DEV_MODE, enabled)
-    console.log('setDevMode:', enabled)
+    storage.setItem(KEYS.SETTINGS_DEV_MODE, enabled);
+    console.log('setDevMode:', enabled);
   } catch (e) {
-    console.log('setDevMode error:', e)
+    console.log('setDevMode error:', e);
   }
 }
 
@@ -74,22 +74,22 @@ export function setDevMode(enabled) {
 function getKey(baseKey) {
   // Settings are shared across modes
   if (SHARED_KEYS.includes(baseKey)) {
-    return baseKey
+    return baseKey;
   }
   // Data keys get prefixed in dev mode
   if (isDevMode()) {
-    return baseKey.replace('pokus_', 'pokus_dev_')
+    return baseKey.replace('pokus_', 'pokus_dev_');
   }
-  return baseKey
+  return baseKey;
 }
 
 // Default settings
 const DEFAULT_SETTINGS = {
-  focusGoal: 5,        // minutes
+  focusGoal: 5, // minutes
   nudgeEnabled: true,
-  nudgeInterval: 5,    // minutes
-  flowRatio: 4         // 4:1 ratio (4 min focus = 1 min break)
-}
+  nudgeInterval: 5, // minutes
+  flowRatio: 4, // 4:1 ratio (4 min focus = 1 min break)
+};
 
 // =============================================================================
 // COINS
@@ -101,11 +101,11 @@ const DEFAULT_SETTINGS = {
  */
 export function getCoins() {
   try {
-    const val = storage.getItem(getKey(KEYS.COINS), 0)
-    return typeof val === 'number' ? val : 0
+    const val = storage.getItem(getKey(KEYS.COINS), 0);
+    return typeof val === 'number' ? val : 0;
   } catch (e) {
-    console.log('getCoins error:', e)
-    return 0
+    console.log('getCoins error:', e);
+    return 0;
   }
 }
 
@@ -115,9 +115,9 @@ export function getCoins() {
  */
 export function setCoins(amount) {
   try {
-    storage.setItem(getKey(KEYS.COINS), amount)
+    storage.setItem(getKey(KEYS.COINS), amount);
   } catch (e) {
-    console.log('setCoins error:', e)
+    console.log('setCoins error:', e);
   }
 }
 
@@ -127,10 +127,10 @@ export function setCoins(amount) {
  * @returns {number} New total
  */
 export function addCoins(amount) {
-  const current = getCoins()
-  const newTotal = current + amount
-  setCoins(newTotal)
-  return newTotal
+  const current = getCoins();
+  const newTotal = current + amount;
+  setCoins(newTotal);
+  return newTotal;
 }
 
 // =============================================================================
@@ -143,11 +143,11 @@ export function addCoins(amount) {
  */
 export function getCaughtPokemon() {
   try {
-    const val = storage.getItem(getKey(KEYS.CAUGHT), [])
-    return Array.isArray(val) ? val : []
+    const val = storage.getItem(getKey(KEYS.CAUGHT), []);
+    return Array.isArray(val) ? val : [];
   } catch (e) {
-    console.log('getCaughtPokemon error:', e)
-    return []
+    console.log('getCaughtPokemon error:', e);
+    return [];
   }
 }
 
@@ -159,23 +159,23 @@ export function getCaughtPokemon() {
 export function addCaughtPokemon(id, isShiny) {
   try {
     // Add to caught list (deduplicated)
-    const caught = getCaughtPokemon()
+    const caught = getCaughtPokemon();
     if (!caught.includes(id)) {
-      caught.push(id)
-      storage.setItem(getKey(KEYS.CAUGHT), caught)
+      caught.push(id);
+      storage.setItem(getKey(KEYS.CAUGHT), caught);
     }
-    
+
     // Add to shiny list if shiny (deduplicated)
     if (isShiny) {
-      let shiny = storage.getItem(getKey(KEYS.SHINY), [])
-      if (!Array.isArray(shiny)) shiny = []
+      let shiny = storage.getItem(getKey(KEYS.SHINY), []);
+      if (!Array.isArray(shiny)) shiny = [];
       if (!shiny.includes(id)) {
-        shiny.push(id)
-        storage.setItem(getKey(KEYS.SHINY), shiny)
+        shiny.push(id);
+        storage.setItem(getKey(KEYS.SHINY), shiny);
       }
     }
   } catch (e) {
-    console.log('addCaughtPokemon error:', e)
+    console.log('addCaughtPokemon error:', e);
   }
 }
 
@@ -185,11 +185,11 @@ export function addCaughtPokemon(id, isShiny) {
  */
 export function getShinyPokemon() {
   try {
-    const val = storage.getItem(getKey(KEYS.SHINY), [])
-    return Array.isArray(val) ? val : []
+    const val = storage.getItem(getKey(KEYS.SHINY), []);
+    return Array.isArray(val) ? val : [];
   } catch (e) {
-    console.log('getShinyPokemon error:', e)
-    return []
+    console.log('getShinyPokemon error:', e);
+    return [];
   }
 }
 
@@ -214,10 +214,10 @@ export function saveLastResult(pokemonId, pokemonName, typeId, typeId2, isShiny,
       typeId: typeId,
       typeId2: typeId2,
       shiny: isShiny,
-      caught: caught
-    })
+      caught: caught,
+    });
   } catch (e) {
-    console.log('saveLastResult error:', e)
+    console.log('saveLastResult error:', e);
   }
 }
 
@@ -227,11 +227,11 @@ export function saveLastResult(pokemonId, pokemonName, typeId, typeId2, isShiny,
  */
 export function getLastResult() {
   try {
-    const val = storage.getItem(getKey(KEYS.LAST_RESULT), null)
-    return (val && val.id) ? val : null
+    const val = storage.getItem(getKey(KEYS.LAST_RESULT), null);
+    return val && val.id ? val : null;
   } catch (e) {
-    console.log('getLastResult error:', e)
-    return null
+    console.log('getLastResult error:', e);
+    return null;
   }
 }
 
@@ -244,11 +244,11 @@ export function getLastResult() {
  * @returns {string}
  */
 function getTodayKey() {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /**
@@ -258,11 +258,11 @@ function getTodayKey() {
  */
 export function getFocusHistory() {
   try {
-    const val = storage.getItem(getKey(KEYS.FOCUS_HISTORY), {})
-    return (typeof val === 'object' && val !== null) ? val : {}
+    const val = storage.getItem(getKey(KEYS.FOCUS_HISTORY), {});
+    return typeof val === 'object' && val !== null ? val : {};
   } catch (e) {
-    console.log('getFocusHistory error:', e)
-    return {}
+    console.log('getFocusHistory error:', e);
+    return {};
   }
 }
 
@@ -273,27 +273,27 @@ export function getFocusHistory() {
  */
 export function addFocusTime(seconds) {
   try {
-    const history = getFocusHistory()
-    const today = getTodayKey()
-    
+    const history = getFocusHistory();
+    const today = getTodayKey();
+
     // Add to today's total
-    history[today] = (history[today] || 0) + seconds
-    
+    history[today] = (history[today] || 0) + seconds;
+
     // Keep only last 7 days in history
-    const keys = Object.keys(history).sort().reverse()
-    const cleaned = {}
+    const keys = Object.keys(history).sort().reverse();
+    const cleaned = {};
     for (let i = 0; i < Math.min(keys.length, 7); i++) {
-      cleaned[keys[i]] = history[keys[i]]
+      cleaned[keys[i]] = history[keys[i]];
     }
-    storage.setItem(getKey(KEYS.FOCUS_HISTORY), cleaned)
-    
+    storage.setItem(getKey(KEYS.FOCUS_HISTORY), cleaned);
+
     // Also add to all-time total (separate key, never cleaned up)
-    const total = getTotalFocusTime()
-    storage.setItem(getKey(KEYS.TOTAL_FOCUS_TIME), total + seconds)
-    
-    console.log('addFocusTime:', seconds, 'Today:', cleaned[today], 'Total:', total + seconds)
+    const total = getTotalFocusTime();
+    storage.setItem(getKey(KEYS.TOTAL_FOCUS_TIME), total + seconds);
+
+    console.log('addFocusTime:', seconds, 'Today:', cleaned[today], 'Total:', total + seconds);
   } catch (e) {
-    console.log('addFocusTime error:', e)
+    console.log('addFocusTime error:', e);
   }
 }
 
@@ -303,11 +303,11 @@ export function addFocusTime(seconds) {
  */
 export function getTotalFocusTime() {
   try {
-    const val = storage.getItem(getKey(KEYS.TOTAL_FOCUS_TIME), 0)
-    return typeof val === 'number' ? val : 0
+    const val = storage.getItem(getKey(KEYS.TOTAL_FOCUS_TIME), 0);
+    return typeof val === 'number' ? val : 0;
   } catch (e) {
-    console.log('getTotalFocusTime error:', e)
-    return 0
+    console.log('getTotalFocusTime error:', e);
+    return 0;
   }
 }
 
@@ -317,11 +317,11 @@ export function getTotalFocusTime() {
  */
 export function getWeeklyFocusTime() {
   try {
-    const data = getWeeklyFocusData()
-    return data.reduce((sum, day) => sum + day.seconds, 0)
+    const data = getWeeklyFocusData();
+    return data.reduce((sum, day) => sum + day.seconds, 0);
   } catch (e) {
-    console.log('getWeeklyFocusTime error:', e)
-    return 0
+    console.log('getWeeklyFocusTime error:', e);
+    return 0;
   }
 }
 
@@ -331,30 +331,30 @@ export function getWeeklyFocusTime() {
  */
 export function getWeeklyFocusData() {
   try {
-    const history = getFocusHistory()
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    const result = []
-    
+    const history = getFocusHistory();
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const result = [];
+
     // Generate last 7 days
     for (let i = 6; i >= 0; i--) {
-      const date = new Date()
-      date.setDate(date.getDate() - i)
-      const year = date.getFullYear()
-      const month = String(date.getMonth() + 1).padStart(2, '0')
-      const day = String(date.getDate()).padStart(2, '0')
-      const key = `${year}-${month}-${day}`
-      
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const key = `${year}-${month}-${day}`;
+
       result.push({
         date: key,
         day: days[date.getDay()],
-        seconds: history[key] || 0
-      })
+        seconds: history[key] || 0,
+      });
     }
-    
-    return result
+
+    return result;
   } catch (e) {
-    console.log('getWeeklyFocusData error:', e)
-    return []
+    console.log('getWeeklyFocusData error:', e);
+    return [];
   }
 }
 
@@ -368,11 +368,11 @@ export function getWeeklyFocusData() {
  */
 export function getTimerState() {
   try {
-    const val = storage.getItem(getKey(KEYS.TIMER_STATE), null)
-    return (val && val.startTime) ? val : null
+    const val = storage.getItem(getKey(KEYS.TIMER_STATE), null);
+    return val && val.startTime ? val : null;
   } catch (e) {
-    console.log('getTimerState error:', e)
-    return null
+    console.log('getTimerState error:', e);
+    return null;
   }
 }
 
@@ -385,12 +385,12 @@ export function saveTimerState(timerState) {
     // Ensure isRunning defaults to true if not specified
     const state = {
       startTime: timerState.startTime,
-      isRunning: timerState.isRunning !== false
-    }
-    storage.setItem(getKey(KEYS.TIMER_STATE), state)
-    console.log('saveTimerState:', state.startTime, 'running:', state.isRunning)
+      isRunning: timerState.isRunning !== false,
+    };
+    storage.setItem(getKey(KEYS.TIMER_STATE), state);
+    console.log('saveTimerState:', state.startTime, 'running:', state.isRunning);
   } catch (e) {
-    console.log('saveTimerState error:', e)
+    console.log('saveTimerState error:', e);
   }
 }
 
@@ -399,10 +399,10 @@ export function saveTimerState(timerState) {
  */
 export function clearTimerState() {
   try {
-    storage.setItem(getKey(KEYS.TIMER_STATE), null)
-    console.log('clearTimerState')
+    storage.setItem(getKey(KEYS.TIMER_STATE), null);
+    console.log('clearTimerState');
   } catch (e) {
-    console.log('clearTimerState error:', e)
+    console.log('clearTimerState error:', e);
   }
 }
 
@@ -412,10 +412,10 @@ export function clearTimerState() {
  */
 export function isTimerRunning() {
   try {
-    const state = getTimerState()
-    return !!(state && state.startTime && state.isRunning !== false)
-  } catch (e) {
-    return false
+    const state = getTimerState();
+    return !!(state && state.startTime && state.isRunning !== false);
+  } catch {
+    return false;
   }
 }
 
@@ -429,10 +429,10 @@ export function isTimerRunning() {
  */
 export function saveNudgeAlarmId(alarmId) {
   try {
-    storage.setItem(getKey(KEYS.NUDGE_ALARM_ID), alarmId)
-    console.log('saveNudgeAlarmId:', alarmId)
+    storage.setItem(getKey(KEYS.NUDGE_ALARM_ID), alarmId);
+    console.log('saveNudgeAlarmId:', alarmId);
   } catch (e) {
-    console.log('saveNudgeAlarmId error:', e)
+    console.log('saveNudgeAlarmId error:', e);
   }
 }
 
@@ -442,11 +442,11 @@ export function saveNudgeAlarmId(alarmId) {
  */
 export function getNudgeAlarmId() {
   try {
-    const val = storage.getItem(getKey(KEYS.NUDGE_ALARM_ID), null)
-    return (typeof val === 'number' && val !== 0) ? val : null
+    const val = storage.getItem(getKey(KEYS.NUDGE_ALARM_ID), null);
+    return typeof val === 'number' && val !== 0 ? val : null;
   } catch (e) {
-    console.log('getNudgeAlarmId error:', e)
-    return null
+    console.log('getNudgeAlarmId error:', e);
+    return null;
   }
 }
 
@@ -455,10 +455,10 @@ export function getNudgeAlarmId() {
  */
 export function clearNudgeAlarmId() {
   try {
-    storage.setItem(getKey(KEYS.NUDGE_ALARM_ID), null)
-    console.log('clearNudgeAlarmId')
+    storage.setItem(getKey(KEYS.NUDGE_ALARM_ID), null);
+    console.log('clearNudgeAlarmId');
   } catch (e) {
-    console.log('clearNudgeAlarmId error:', e)
+    console.log('clearNudgeAlarmId error:', e);
   }
 }
 
@@ -472,11 +472,11 @@ export function clearNudgeAlarmId() {
  */
 export function getFocusGoal() {
   try {
-    const val = storage.getItem(KEYS.SETTINGS_FOCUS_GOAL, DEFAULT_SETTINGS.focusGoal)
-    return typeof val === 'number' ? val : DEFAULT_SETTINGS.focusGoal
+    const val = storage.getItem(KEYS.SETTINGS_FOCUS_GOAL, DEFAULT_SETTINGS.focusGoal);
+    return typeof val === 'number' ? val : DEFAULT_SETTINGS.focusGoal;
   } catch (e) {
-    console.log('getFocusGoal error:', e)
-    return DEFAULT_SETTINGS.focusGoal
+    console.log('getFocusGoal error:', e);
+    return DEFAULT_SETTINGS.focusGoal;
   }
 }
 
@@ -486,9 +486,9 @@ export function getFocusGoal() {
  */
 export function setFocusGoal(minutes) {
   try {
-    storage.setItem(KEYS.SETTINGS_FOCUS_GOAL, minutes)
+    storage.setItem(KEYS.SETTINGS_FOCUS_GOAL, minutes);
   } catch (e) {
-    console.log('setFocusGoal error:', e)
+    console.log('setFocusGoal error:', e);
   }
 }
 
@@ -498,11 +498,11 @@ export function setFocusGoal(minutes) {
  */
 export function isNudgeEnabled() {
   try {
-    const val = storage.getItem(KEYS.SETTINGS_NUDGE_ENABLED, DEFAULT_SETTINGS.nudgeEnabled)
-    return typeof val === 'boolean' ? val : DEFAULT_SETTINGS.nudgeEnabled
+    const val = storage.getItem(KEYS.SETTINGS_NUDGE_ENABLED, DEFAULT_SETTINGS.nudgeEnabled);
+    return typeof val === 'boolean' ? val : DEFAULT_SETTINGS.nudgeEnabled;
   } catch (e) {
-    console.log('isNudgeEnabled error:', e)
-    return DEFAULT_SETTINGS.nudgeEnabled
+    console.log('isNudgeEnabled error:', e);
+    return DEFAULT_SETTINGS.nudgeEnabled;
   }
 }
 
@@ -512,9 +512,9 @@ export function isNudgeEnabled() {
  */
 export function setNudgeEnabled(enabled) {
   try {
-    storage.setItem(KEYS.SETTINGS_NUDGE_ENABLED, enabled)
+    storage.setItem(KEYS.SETTINGS_NUDGE_ENABLED, enabled);
   } catch (e) {
-    console.log('setNudgeEnabled error:', e)
+    console.log('setNudgeEnabled error:', e);
   }
 }
 
@@ -524,11 +524,11 @@ export function setNudgeEnabled(enabled) {
  */
 export function getNudgeInterval() {
   try {
-    const val = storage.getItem(KEYS.SETTINGS_NUDGE_INTERVAL, DEFAULT_SETTINGS.nudgeInterval)
-    return typeof val === 'number' ? val : DEFAULT_SETTINGS.nudgeInterval
+    const val = storage.getItem(KEYS.SETTINGS_NUDGE_INTERVAL, DEFAULT_SETTINGS.nudgeInterval);
+    return typeof val === 'number' ? val : DEFAULT_SETTINGS.nudgeInterval;
   } catch (e) {
-    console.log('getNudgeInterval error:', e)
-    return DEFAULT_SETTINGS.nudgeInterval
+    console.log('getNudgeInterval error:', e);
+    return DEFAULT_SETTINGS.nudgeInterval;
   }
 }
 
@@ -538,9 +538,9 @@ export function getNudgeInterval() {
  */
 export function setNudgeInterval(minutes) {
   try {
-    storage.setItem(KEYS.SETTINGS_NUDGE_INTERVAL, minutes)
+    storage.setItem(KEYS.SETTINGS_NUDGE_INTERVAL, minutes);
   } catch (e) {
-    console.log('setNudgeInterval error:', e)
+    console.log('setNudgeInterval error:', e);
   }
 }
 
@@ -550,11 +550,11 @@ export function setNudgeInterval(minutes) {
  */
 export function getFlowRatio() {
   try {
-    const val = storage.getItem(KEYS.SETTINGS_FLOW_RATIO, DEFAULT_SETTINGS.flowRatio)
-    return typeof val === 'number' ? val : DEFAULT_SETTINGS.flowRatio
+    const val = storage.getItem(KEYS.SETTINGS_FLOW_RATIO, DEFAULT_SETTINGS.flowRatio);
+    return typeof val === 'number' ? val : DEFAULT_SETTINGS.flowRatio;
   } catch (e) {
-    console.log('getFlowRatio error:', e)
-    return DEFAULT_SETTINGS.flowRatio
+    console.log('getFlowRatio error:', e);
+    return DEFAULT_SETTINGS.flowRatio;
   }
 }
 
@@ -564,9 +564,9 @@ export function getFlowRatio() {
  */
 export function setFlowRatio(ratio) {
   try {
-    storage.setItem(KEYS.SETTINGS_FLOW_RATIO, ratio)
+    storage.setItem(KEYS.SETTINGS_FLOW_RATIO, ratio);
   } catch (e) {
-    console.log('setFlowRatio error:', e)
+    console.log('setFlowRatio error:', e);
   }
 }
 
@@ -580,28 +580,28 @@ export function setFlowRatio(ratio) {
  */
 export function resetAllProgress() {
   try {
-    const mode = isDevMode() ? 'DEV' : 'NORMAL'
-    
+    const mode = isDevMode() ? 'DEV' : 'NORMAL';
+
     // Reset coins
-    storage.setItem(getKey(KEYS.COINS), 0)
-    
+    storage.setItem(getKey(KEYS.COINS), 0);
+
     // Reset caught Pokemon
-    storage.setItem(getKey(KEYS.CAUGHT), [])
-    storage.setItem(getKey(KEYS.SHINY), [])
-    
+    storage.setItem(getKey(KEYS.CAUGHT), []);
+    storage.setItem(getKey(KEYS.SHINY), []);
+
     // Reset last result
-    storage.setItem(getKey(KEYS.LAST_RESULT), null)
-    
+    storage.setItem(getKey(KEYS.LAST_RESULT), null);
+
     // Reset focus history
-    storage.setItem(getKey(KEYS.FOCUS_HISTORY), {})
-    storage.setItem(getKey(KEYS.TOTAL_FOCUS_TIME), 0)
-    
+    storage.setItem(getKey(KEYS.FOCUS_HISTORY), {});
+    storage.setItem(getKey(KEYS.TOTAL_FOCUS_TIME), 0);
+
     // Clear timer state
-    storage.setItem(getKey(KEYS.TIMER_STATE), null)
-    storage.setItem(getKey(KEYS.NUDGE_ALARM_ID), null)
-    
-    console.log('resetAllProgress: All progress data cleared for', mode, 'mode')
+    storage.setItem(getKey(KEYS.TIMER_STATE), null);
+    storage.setItem(getKey(KEYS.NUDGE_ALARM_ID), null);
+
+    console.log('resetAllProgress: All progress data cleared for', mode, 'mode');
   } catch (e) {
-    console.log('resetAllProgress error:', e)
+    console.log('resetAllProgress error:', e);
   }
 }

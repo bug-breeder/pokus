@@ -1,25 +1,25 @@
 /**
  * Vibration Utility
  * Centralized vibration patterns using pattern-based API (auto-stops)
- * 
+ *
  * Uses getType() API (API_LEVEL 3.6+) with array-based start()
  * Pattern-based vibrations automatically stop after completion
- * 
+ *
  * MAXIMUM INTENSITY patterns for strong haptic feedback
  */
 
-import { Vibrator } from '@zos/sensor'
+import { Vibrator } from '@zos/sensor';
 
-let vibrator = null
+let vibrator = null;
 
 /**
  * Get or create the vibrator instance
  */
 function getVibrator() {
   if (!vibrator) {
-    vibrator = new Vibrator()
+    vibrator = new Vibrator();
   }
-  return vibrator
+  return vibrator;
 }
 
 /**
@@ -29,17 +29,17 @@ function getVibrator() {
  */
 export function vibrateNudge() {
   try {
-    const v = getVibrator()
-    const type = v.getType()
+    const v = getVibrator();
+    const type = v.getType();
     v.start([
       { type: type.URGENT, duration: 300 },
       { type: type.URGENT, duration: 300 },
       { type: type.URGENT, duration: 300 },
       { type: type.URGENT, duration: 300 },
-      { type: type.URGENT, duration: 300 }
-    ])
+      { type: type.URGENT, duration: 300 },
+    ]);
   } catch (e) {
-    console.log('vibrateNudge error:', e)
+    console.log('vibrateNudge error:', e);
   }
 }
 
@@ -49,17 +49,17 @@ export function vibrateNudge() {
  */
 export function vibrateBreakComplete() {
   try {
-    const v = getVibrator()
-    const type = v.getType()
+    const v = getVibrator();
+    const type = v.getType();
     v.start([
       { type: type.URGENT, duration: 300 },
       { type: type.URGENT, duration: 300 },
       { type: type.URGENT, duration: 300 },
       { type: type.URGENT, duration: 300 },
-      { type: type.URGENT, duration: 300 }
-    ])
+      { type: type.URGENT, duration: 300 },
+    ]);
   } catch (e) {
-    console.log('vibrateBreakComplete error:', e)
+    console.log('vibrateBreakComplete error:', e);
   }
 }
 
@@ -69,8 +69,8 @@ export function vibrateBreakComplete() {
  */
 export function vibrateCatchSuccess() {
   try {
-    const v = getVibrator()
-    const type = v.getType()
+    const v = getVibrator();
+    const type = v.getType();
     v.start([
       { type: type.URGENT, duration: 200 },
       { type: type.URGENT, duration: 200 },
@@ -80,10 +80,10 @@ export function vibrateCatchSuccess() {
       { type: type.PAUSE, duration: 150 },
       { type: type.URGENT, duration: 400 },
       { type: type.URGENT, duration: 400 },
-      { type: type.URGENT, duration: 400 }
-    ])
+      { type: type.URGENT, duration: 400 },
+    ]);
   } catch (e) {
-    console.log('vibrateCatchSuccess error:', e)
+    console.log('vibrateCatchSuccess error:', e);
   }
 }
 
@@ -93,15 +93,15 @@ export function vibrateCatchSuccess() {
  */
 export function vibrateCatchFail() {
   try {
-    const v = getVibrator()
-    const type = v.getType()
+    const v = getVibrator();
+    const type = v.getType();
     v.start([
       { type: type.STRONG_SHORT, duration: 300 },
       { type: type.STRONG_SHORT, duration: 300 },
-      { type: type.STRONG_SHORT, duration: 300 }
-    ])
+      { type: type.STRONG_SHORT, duration: 300 },
+    ]);
   } catch (e) {
-    console.log('vibrateCatchFail error:', e)
+    console.log('vibrateCatchFail error:', e);
   }
 }
 
@@ -111,13 +111,11 @@ export function vibrateCatchFail() {
  */
 export function vibrateButtonTap() {
   try {
-    const v = getVibrator()
-    const type = v.getType()
-    v.start([
-      { type: type.STRONG_SHORT, duration: 150 }
-    ])
+    const v = getVibrator();
+    const type = v.getType();
+    v.start([{ type: type.STRONG_SHORT, duration: 150 }]);
   } catch (e) {
-    console.log('vibrateButtonTap error:', e)
+    console.log('vibrateButtonTap error:', e);
   }
 }
 
@@ -127,15 +125,15 @@ export function vibrateButtonTap() {
  */
 export function vibrateSessionStart() {
   try {
-    const v = getVibrator()
-    const type = v.getType()
+    const v = getVibrator();
+    const type = v.getType();
     v.start([
       { type: type.URGENT, duration: 250 },
       { type: type.URGENT, duration: 250 },
-      { type: type.URGENT, duration: 250 }
-    ])
+      { type: type.URGENT, duration: 250 },
+    ]);
   } catch (e) {
-    console.log('vibrateSessionStart error:', e)
+    console.log('vibrateSessionStart error:', e);
   }
 }
 
@@ -145,8 +143,8 @@ export function vibrateSessionStart() {
 export function stopVibration() {
   if (vibrator) {
     try {
-      vibrator.stop()
-    } catch (e) {
+      vibrator.stop();
+    } catch {
       // Ignore
     }
   }
