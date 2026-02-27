@@ -51,21 +51,21 @@ Page({
 
     // ========== MENU BUTTONS ==========
 
-    // Start Focus (green, primary action)
+    // Start Timer (green, primary action)
     hmUI.createWidget(hmUI.widget.BUTTON, {
       x: CX - LAYOUT.BUTTON_WIDTH / 2,
       y: LAYOUT.BUTTON_START_Y,
       w: LAYOUT.BUTTON_WIDTH,
       h: LAYOUT.BUTTON_HEIGHT,
-      text: 'Start Focus',
+      text: 'Start Timer',
       text_size: 28,
       color: COLOR.BG,
       radius: 36,
       normal_color: COLOR.GREEN,
       press_color: COLOR.DARK_GREEN,
       click_func: () => {
-        console.log('[Menu] Start Focus clicked');
-        push({ url: 'pages/timer/index' });
+        console.log('[Menu] Start Timer clicked');
+        push({ url: 'pages/timer-select/index' });
       },
     });
 

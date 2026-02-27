@@ -129,3 +129,24 @@ export function getGameConfig() {
 // Legacy export for backwards compatibility (uses normal config)
 // NOTE: Prefer getGameConfig() for dynamic mode support
 export const GAME = GAME_NORMAL;
+
+// =============================================================================
+// TIMER MODE PRESETS
+// =============================================================================
+
+export const DEFAULT_FOCUS_SECONDS = 300;
+export const DEFAULT_BREAK_SECONDS = 300;
+export const FOCUS_PRESET_MINUTES = [5, 10, 15, 20, 25, 30];
+export const BREAK_PRESET_MINUTES = [5, 10, 15];
+
+// Accumulated focus thresholds for Pokemon encounter trigger
+const ENCOUNTER_ACCUMULATED_NORMAL = 3600; // 1 hour
+const ENCOUNTER_ACCUMULATED_DEV = 5; // 5s for dev mode testing
+
+/**
+ * Get required accumulated focus seconds to trigger a Pokemon encounter
+ * @returns {number} Seconds of focus needed
+ */
+export function getEncounterThreshold() {
+  return isDevMode() ? ENCOUNTER_ACCUMULATED_DEV : ENCOUNTER_ACCUMULATED_NORMAL;
+}

@@ -138,6 +138,25 @@ export function vibrateSessionStart() {
 }
 
 /**
+ * Timer done alert - strong double buzz to notify completion
+ * Used once on completion; caller sets interval for repeating every 3s
+ * Pattern: 2 urgent pulses with short gap
+ */
+export function vibrateTimerDone() {
+  try {
+    const v = getVibrator();
+    const type = v.getType();
+    v.start([
+      { type: type.URGENT, duration: 400 },
+      { type: type.PAUSE, duration: 200 },
+      { type: type.URGENT, duration: 400 },
+    ]);
+  } catch (e) {
+    console.log('vibrateTimerDone error:', e);
+  }
+}
+
+/**
  * Stop any ongoing vibration (safety cleanup)
  */
 export function stopVibration() {
