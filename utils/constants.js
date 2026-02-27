@@ -107,15 +107,13 @@ const GAME_BASE = {
 // Normal mode config
 const GAME_NORMAL = {
   ...GAME_BASE,
-  ENCOUNTER_THRESHOLD: 300, // 5 minutes (300 seconds) to trigger encounter
-  COINS_PER_BLOCK: 1, // 1 coin per 5-minute block completed
+  COIN_BLOCK_SECONDS: 300, // earn 1 coin per 5-minute block of focus
 };
 
 // Developer mode config (faster testing)
 const GAME_DEV = {
   ...GAME_BASE,
-  ENCOUNTER_THRESHOLD: 1, // 1 second for quick testing
-  COINS_PER_BLOCK: 1, // Same coin rate
+  COIN_BLOCK_SECONDS: 5, // earn 1 coin per 5-second block (matches encounter threshold)
 };
 
 /**

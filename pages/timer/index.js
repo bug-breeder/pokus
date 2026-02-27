@@ -10,21 +10,19 @@
 
 import hmUI from '@zos/ui';
 import { push, replace } from '@zos/router';
-import { getApp, queryPermission, requestPermission } from '@zos/app';
+import { queryPermission, requestPermission } from '@zos/app';
 import { setWakeUpRelaunch } from '@zos/display';
 import { start as startService, stop as stopService } from '@zos/app-service';
 import { Time } from '@zos/sensor';
 import { set as setAlarm, cancel as cancelAlarm } from '@zos/alarm';
-import { DEVICE_WIDTH, getGameConfig, getEncounterThreshold } from '../../utils/constants';
+import { DEVICE_WIDTH, getGameConfig } from '../../utils/constants';
 import {
   addCoins,
   addFocusTime,
   getTimerState,
   saveTimerState,
   clearTimerState,
-  getAccumulatedFocus,
   addAccumulatedFocus,
-  deductAccumulatedFocus,
   getNudgeAlarmId,
   saveNudgeAlarmId,
   clearNudgeAlarmId,
@@ -70,13 +68,24 @@ let vibrateIntervalId = null;
 let gameConfig = null;
 let timeSensor = null;
 
+// Dash ring constants
+// 36 × 10° = 360°; each dash is 8° arc at r=220 → ~30px along arc, 8px radially = elongated curved segment
+const DASH_COUNT = 36;
+const DASH_DEG = 8;
+const GAP_DEG = 2;
+const RING_LINE_WIDTH = 8;
+const RING_R = 220; // inset so strokes stay inside the circular screen
+const RING_X = CX - RING_R; // 20
+const RING_Y = CX - RING_R; // 20
+const RING_SIZE = RING_R * 2; // 440
+
 // Widget references (running state)
-let progressArc = null;
+let dashWidgets = []; // ARC widgets for the dashed ring
+let litCount = DASH_COUNT;
 let clockWidget = null;
 let modeLabelWidget = null;
 let countdownWidget = null;
 let totalDurationWidget = null;
-let statusTextWidget = null;
 let cancelBtnBg = null;
 let cancelBtnIcon = null;
 let cancelHitbox = null;
@@ -119,25 +128,31 @@ function getCurrentTime() {
 // ============================================================================
 
 function setRunningVisible(visible) {
+  // TEXT widgets: blank/restore content — VISIBLE prop is unreliable on TEXT in ZeppOS
+  if (visible) {
+    const modeLabel = ts.mode === 'focus' ? 'Focus' : 'Break';
+    if (modeLabelWidget) modeLabelWidget.setProperty(hmUI.prop.TEXT, modeLabel);
+    if (countdownWidget)
+      countdownWidget.setProperty(hmUI.prop.TEXT, formatTime(getRemainingSeconds()));
+    if (totalDurationWidget)
+      totalDurationWidget.setProperty(hmUI.prop.TEXT, formatTime(ts.durationSeconds));
+    if (clockWidget) clockWidget.setProperty(hmUI.prop.TEXT, getCurrentTime());
+  } else {
+    if (modeLabelWidget) modeLabelWidget.setProperty(hmUI.prop.TEXT, '');
+    if (countdownWidget) countdownWidget.setProperty(hmUI.prop.TEXT, '');
+    if (totalDurationWidget) totalDurationWidget.setProperty(hmUI.prop.TEXT, '');
+    if (clockWidget) clockWidget.setProperty(hmUI.prop.TEXT, '');
+  }
+  setCancelVisible(visible ? 1 : 0);
+}
+
+function setCancelVisible(visible) {
   const vis = visible ? 1 : 0;
-  const widgets = [
-    clockWidget,
-    modeLabelWidget,
-    countdownWidget,
-    totalDurationWidget,
-    statusTextWidget,
-    cancelBtnBg,
-    cancelBtnIcon,
-    cancelHitbox,
-  ];
-  for (const w of widgets) {
-    if (w) {
+  for (const w of [cancelBtnBg, cancelBtnIcon, cancelHitbox]) {
+    if (w)
       try {
         w.setProperty(hmUI.prop.VISIBLE, vis);
-      } catch (e) {
-        // ignore
-      }
-    }
+      } catch {}
   }
 }
 
@@ -153,28 +168,72 @@ function deleteCompletionWidgets() {
 }
 
 // ============================================================================
+// Dash ring helpers
+// ============================================================================
+
+function buildDashRing() {
+  const activeColor = ts.mode === 'focus' ? COLORS.focus.ring : COLORS.break.ring;
+  const trackColor = ts.mode === 'focus' ? COLORS.focus.track : COLORS.break.track;
+  const remaining = getRemainingSeconds();
+  const progress = ts.durationSeconds > 0 ? remaining / ts.durationSeconds : 0;
+  litCount = ts.isCompleted ? DASH_COUNT : Math.round(progress * DASH_COUNT);
+
+  dashWidgets = [];
+  for (let i = 0; i < DASH_COUNT; i++) {
+    const startAngle = -90 + i * (DASH_DEG + GAP_DEG);
+    const endAngle = startAngle + DASH_DEG;
+    dashWidgets.push(
+      hmUI.createWidget(hmUI.widget.ARC, {
+        x: RING_X,
+        y: RING_Y,
+        w: RING_SIZE,
+        h: RING_SIZE,
+        start_angle: startAngle,
+        end_angle: endAngle,
+        color: i < litCount ? activeColor : trackColor,
+        line_width: RING_LINE_WIDTH,
+      })
+    );
+  }
+}
+
+function updateDashRing(remaining) {
+  if (dashWidgets.length === 0) return;
+  const progress = ts.durationSeconds > 0 ? remaining / ts.durationSeconds : 0;
+  const newLit = Math.round(progress * DASH_COUNT);
+  if (newLit === litCount) return;
+
+  const activeColor = ts.mode === 'focus' ? COLORS.focus.ring : COLORS.break.ring;
+  const trackColor = ts.mode === 'focus' ? COLORS.focus.track : COLORS.break.track;
+  const lo = Math.min(newLit, litCount);
+  const hi = Math.max(newLit, litCount);
+  for (let i = lo; i < hi; i++) {
+    if (dashWidgets[i]) {
+      dashWidgets[i].setProperty(hmUI.prop.COLOR, i < newLit ? activeColor : trackColor);
+    }
+  }
+  litCount = newLit;
+}
+
+function setDashRingFull() {
+  if (dashWidgets.length === 0) return;
+  const activeColor = ts.mode === 'focus' ? COLORS.focus.ring : COLORS.break.ring;
+  for (let i = 0; i < DASH_COUNT; i++) {
+    if (dashWidgets[i]) dashWidgets[i].setProperty(hmUI.prop.COLOR, activeColor);
+  }
+  litCount = DASH_COUNT;
+}
+
+// ============================================================================
 // Timer tick
 // ============================================================================
 
-function updateArc(remaining) {
-  if (!progressArc) return;
-  const progress = ts.durationSeconds > 0 ? remaining / ts.durationSeconds : 0;
-  const endAngle = -90 + progress * 360;
-  // Avoid end_angle === start_angle (causes rendering issues)
-  const safeEnd = Math.max(-89, endAngle);
-  progressArc.setProperty(hmUI.prop.MORE, { end_angle: safeEnd });
-}
-
 function updateRunningUI() {
   const remaining = getRemainingSeconds();
-
   if (countdownWidget) {
     countdownWidget.setProperty(hmUI.prop.TEXT, formatTime(remaining));
   }
-  if (statusTextWidget) {
-    statusTextWidget.setProperty(hmUI.prop.TEXT, getStatusText(remaining));
-  }
-  updateArc(remaining);
+  updateDashRing(remaining);
 }
 
 function tick() {
@@ -287,7 +346,7 @@ function onTimerComplete() {
   if (ts.mode === 'focus') {
     addFocusTime(ts.durationSeconds);
     addAccumulatedFocus(ts.durationSeconds);
-    const coins = Math.floor(ts.durationSeconds / gameConfig.ENCOUNTER_THRESHOLD);
+    const coins = Math.floor(ts.durationSeconds / gameConfig.COIN_BLOCK_SECONDS);
     if (coins > 0) addCoins(coins);
     cancelNudgeAlarm();
     stopTimerService();
@@ -296,13 +355,11 @@ function onTimerComplete() {
   clearTimerState();
   setWakeUpRelaunch({ relaunch: false });
 
-  // Update arc to solid full circle
-  if (progressArc) {
-    progressArc.setProperty(hmUI.prop.MORE, { end_angle: 270 });
-  }
+  // Light up all dashes (full ring on completion)
+  setDashRingFull();
 
-  // Hide running state widgets
-  setRunningVisible(false);
+  // Hide only the cancel button — keep timer display visible
+  setCancelVisible(false);
 
   // Start repeating vibration (every 3s until user acts)
   vibrateTimerDone();
@@ -323,139 +380,74 @@ function stopVibrations() {
 // Completion overlay builders
 // ============================================================================
 
-function makeBtn(x, y, w, h, color) {
-  return hmUI.createWidget(hmUI.widget.FILL_RECT, {
-    x,
-    y,
-    w,
-    h,
-    radius: Math.floor(h / 2),
-    color,
-  });
-}
+// Create a circular icon button and push all sub-widgets into completionWidgets
+function makeIconBtn(x, y, size, bgColor, iconSrc, callback) {
+  const iconSize = Math.round(size * 0.55);
+  const iconOff = Math.round((size - iconSize) / 2);
 
-function makeBtnText(x, y, w, h, text, color) {
-  return hmUI.createWidget(hmUI.widget.TEXT, {
-    x,
-    y,
-    w,
-    h,
-    text,
-    text_size: 28,
-    color,
-    align_h: hmUI.align.CENTER_H,
-    align_v: hmUI.align.CENTER_V,
-  });
-}
+  completionWidgets.push(
+    hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x,
+      y,
+      w: size,
+      h: size,
+      radius: size / 2,
+      color: bgColor,
+    })
+  );
 
-function makeHitbox(x, y, w, h, callback) {
+  completionWidgets.push(
+    hmUI.createWidget(hmUI.widget.IMG, {
+      x: x + iconOff,
+      y: y + iconOff,
+      w: iconSize,
+      h: iconSize,
+      src: iconSrc,
+      auto_scale: true,
+      auto_scale_obj_fit: 1,
+    })
+  );
+
   const hb = hmUI.createWidget(hmUI.widget.FILL_RECT, {
     x,
     y,
-    w,
-    h,
-    radius: Math.floor(h / 2),
+    w: size,
+    h: size,
+    radius: size / 2,
     color: 0x000000,
     alpha: 0,
   });
   hb.addEventListener(hmUI.event.CLICK_UP, callback);
-  return hb;
+  completionWidgets.push(hb);
 }
 
 function buildCompletionOverlay() {
-  const modeColor = ts.mode === 'focus' ? COLORS.focus.ring : COLORS.break.ring;
-  const title = ts.mode === 'focus' ? 'Focus Done!' : 'Break Done!';
-  const doneText = `${formatTime(ts.durationSeconds)} \u2713`;
-
-  const BW = 320; // button width
-  const BH = 62; // button height
-  const BX = CX - BW / 2; // 80
-
-  // Title
-  const titleW = hmUI.createWidget(hmUI.widget.TEXT, {
-    x: 0,
-    y: 90,
-    w: DEVICE_WIDTH,
-    h: 44,
-    text: title,
-    text_size: 34,
-    color: modeColor,
-    align_h: hmUI.align.CENTER_H,
-  });
-  completionWidgets.push(titleW);
-
-  // Completed time
-  const doneW = hmUI.createWidget(hmUI.widget.TEXT, {
-    x: 0,
-    y: 142,
-    w: DEVICE_WIDTH,
-    h: 52,
-    text: doneText,
-    text_size: 40,
-    color: COLORS.text.primary,
-    align_h: hmUI.align.CENTER_H,
-  });
-  completionWidgets.push(doneW);
-
-  // Divider
-  const divW = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-    x: 80,
-    y: 205,
-    w: 320,
-    h: 1,
-    color: 0x3a3a3a,
-  });
-  completionWidgets.push(divW);
+  // Crescent arc: 3 buttons placed along a circle of r=155 at the bottom of the screen.
+  // Angles from top clockwise: left=220°, center=180° (nadir), right=140°
+  // Action buttons (play/pause) are larger; dismiss X is smaller.
+  // Arc center coords: L=(140,359) C=(240,395) R=(340,359)
+  const A = 76; // action button size (play / pause)
+  const D = 64; // dismiss button size (x)
+  const L = { x: 140 - A / 2, y: 359 - A / 2 }; // { x:102, y:321 }
+  const C = { x: 240 - D / 2, y: 395 - D / 2 }; // { x:208, y:363 }
+  const R = { x: 340 - A / 2, y: 359 - A / 2 }; // { x:302, y:321 }
 
   if (ts.mode === 'focus') {
-    const canCatch = getAccumulatedFocus() >= getEncounterThreshold();
-    let y1, y2, y3;
-
-    if (canCatch) {
-      y1 = 220; // Catch Pokemon
-      y2 = 290; // New Focus
-      y3 = 360; // Take Break
-    } else {
-      y1 = null; // no catch button
-      y2 = 245; // New Focus
-      y3 = 315; // Take Break
-    }
-
-    if (canCatch) {
-      completionWidgets.push(makeBtn(BX, y1, BW, BH, COLORS.button.bg));
-      completionWidgets.push(makeBtnText(BX, y1, BW, BH, 'Catch Pokemon!', COLORS.catch));
-      completionWidgets.push(makeHitbox(BX, y1, BW, BH, handleCatchPokemon));
-    }
-
-    completionWidgets.push(makeBtn(BX, y2, BW, BH, COLORS.button.bg));
-    completionWidgets.push(makeBtnText(BX, y2, BW, BH, 'New Focus', COLORS.text.primary));
-    completionWidgets.push(makeHitbox(BX, y2, BW, BH, handleNewFocus));
-
-    completionWidgets.push(makeBtn(BX, y3, BW, BH, COLORS.button.bg));
-    completionWidgets.push(makeBtnText(BX, y3, BW, BH, 'Take Break', COLORS.text.primary));
-    completionWidgets.push(makeHitbox(BX, y3, BW, BH, handleTakeBreak));
+    // left=flame/blue(New Focus), center=x/dark(Dismiss), right=mug/green(Take Break)
+    makeIconBtn(L.x, L.y, A, COLORS.focus.ring, 'raw/icons/fire-white.png', handleNewFocus);
+    makeIconBtn(C.x, C.y, D, COLORS.button.bg, 'raw/icons/x.png', handleDismiss);
+    makeIconBtn(R.x, R.y, A, COLORS.break.ring, 'raw/icons/mug-white.png', handleTakeBreak);
   } else {
-    // Break done
     const extSecs = Math.floor(ts.baseBreakSeconds / 2);
-    const extMins = Math.floor(extSecs / 60);
-    const extRemSecs = extSecs % 60;
-    const extLabel =
-      extMins > 0
-        ? `Extend +${extMins}m${extRemSecs > 0 ? ` ${extRemSecs}s` : ''}`
-        : `Extend +${extSecs}s`;
-
     if (ts.canExtend && extSecs > 0) {
-      completionWidgets.push(makeBtn(BX, 235, BW, BH, COLORS.button.bg));
-      completionWidgets.push(makeBtnText(BX, 235, BW, BH, extLabel, COLORS.extend));
-      completionWidgets.push(makeHitbox(BX, 235, BW, BH, handleExtend));
-
-      completionWidgets.push(makeBtn(BX, 305, BW, BH, COLORS.button.bg));
-      completionWidgets.push(makeBtnText(BX, 305, BW, BH, 'Start Focus', COLORS.text.primary));
-      completionWidgets.push(makeHitbox(BX, 305, BW, BH, handleStartFocus));
+      // left=mug/green(Extend), center=x/dark(Dismiss), right=flame/blue(Start Focus)
+      makeIconBtn(L.x, L.y, A, COLORS.break.ring, 'raw/icons/mug-white.png', handleExtend);
+      makeIconBtn(C.x, C.y, D, COLORS.button.bg, 'raw/icons/x.png', handleDismiss);
+      makeIconBtn(R.x, R.y, A, COLORS.focus.ring, 'raw/icons/fire-white.png', handleStartFocus);
     } else {
-      completionWidgets.push(makeBtn(BX, 265, BW, BH, COLORS.button.bg));
-      completionWidgets.push(makeBtnText(BX, 265, BW, BH, 'Start Focus', COLORS.text.primary));
-      completionWidgets.push(makeHitbox(BX, 265, BW, BH, handleStartFocus));
+      // 2 buttons: x/dark(Dismiss) at L arc + flame/blue(Start Focus) at R arc
+      makeIconBtn(L.x, L.y, D, COLORS.button.bg, 'raw/icons/x.png', handleDismiss);
+      makeIconBtn(R.x, R.y, A, COLORS.focus.ring, 'raw/icons/fire-white.png', handleStartFocus);
     }
   }
 }
@@ -463,6 +455,11 @@ function buildCompletionOverlay() {
 // ============================================================================
 // Action handlers
 // ============================================================================
+
+function handleDismiss() {
+  stopVibrations();
+  replace({ url: 'pages/timer-select/index' });
+}
 
 function handleCancel() {
   if (ts.isCompleted) return;
@@ -499,24 +496,19 @@ function handleNewFocus() {
   scheduleFirstNudge();
   setWakeUpRelaunch({ relaunch: true });
 
-  // Reset arc to full, update text widgets, show running state
-  if (progressArc) {
-    progressArc.setProperty(hmUI.prop.MORE, { end_angle: 270 });
-  }
+  // Reset ring to full, update countdown, restore cancel button
+  setDashRingFull();
   if (countdownWidget) {
     countdownWidget.setProperty(hmUI.prop.TEXT, formatTime(ts.durationSeconds));
   }
   if (totalDurationWidget) {
-    totalDurationWidget.setProperty(hmUI.prop.TEXT, `/ ${formatTime(ts.durationSeconds)}`);
-  }
-  if (statusTextWidget) {
-    statusTextWidget.setProperty(hmUI.prop.TEXT, getStatusText(ts.durationSeconds));
+    totalDurationWidget.setProperty(hmUI.prop.TEXT, formatTime(ts.durationSeconds));
   }
   if (clockWidget) {
     clockWidget.setProperty(hmUI.prop.TEXT, getCurrentTime());
   }
 
-  setRunningVisible(true);
+  setCancelVisible(true);
   startTick();
 }
 
@@ -527,23 +519,6 @@ function handleTakeBreak() {
     url: 'pages/timer-select/index',
     params: JSON.stringify({ mode: 'break' }),
   });
-}
-
-function handleCatchPokemon() {
-  if (!ts.isCompleted) return;
-  stopVibrations();
-  deductAccumulatedFocus(getEncounterThreshold());
-  // Pass focus seconds for shiny calculation
-  try {
-    const app = getApp();
-    if (app) {
-      if (!app.globalData) app.globalData = {};
-      app.globalData.sessionSeconds = ts.durationSeconds;
-    }
-  } catch (e) {
-    // ignore
-  }
-  push({ url: 'pages/encounter/index' });
 }
 
 function handleExtend() {
@@ -568,23 +543,18 @@ function handleExtend() {
   });
   setWakeUpRelaunch({ relaunch: true });
 
-  if (progressArc) {
-    progressArc.setProperty(hmUI.prop.MORE, { end_angle: 270 });
-  }
+  setDashRingFull();
   if (countdownWidget) {
     countdownWidget.setProperty(hmUI.prop.TEXT, formatTime(extSecs));
   }
   if (totalDurationWidget) {
-    totalDurationWidget.setProperty(hmUI.prop.TEXT, `/ ${formatTime(extSecs)}`);
-  }
-  if (statusTextWidget) {
-    statusTextWidget.setProperty(hmUI.prop.TEXT, getStatusText(extSecs));
+    totalDurationWidget.setProperty(hmUI.prop.TEXT, formatTime(extSecs));
   }
   if (clockWidget) {
     clockWidget.setProperty(hmUI.prop.TEXT, getCurrentTime());
   }
 
-  setRunningVisible(true);
+  setCancelVisible(true);
   startTick();
 }
 
@@ -605,7 +575,7 @@ function buildRunningState() {
 
   clockWidget = hmUI.createWidget(hmUI.widget.TEXT, {
     x: 0,
-    y: 50,
+    y: 36,
     w: DEVICE_WIDTH,
     h: 30,
     text: getCurrentTime(),
@@ -625,9 +595,10 @@ function buildRunningState() {
     align_h: hmUI.align.CENTER_H,
   });
 
+  // Countdown (shifted up to leave room for crescent buttons)
   countdownWidget = hmUI.createWidget(hmUI.widget.TEXT, {
     x: 0,
-    y: 140,
+    y: 178,
     w: DEVICE_WIDTH,
     h: 92,
     text: formatTime(remaining),
@@ -636,24 +607,14 @@ function buildRunningState() {
     align_h: hmUI.align.CENTER_H,
   });
 
+  // Total duration shown small below countdown
   totalDurationWidget = hmUI.createWidget(hmUI.widget.TEXT, {
     x: 0,
-    y: 240,
-    w: DEVICE_WIDTH,
-    h: 36,
-    text: `/ ${formatTime(ts.durationSeconds)}`,
-    text_size: 28,
-    color: COLORS.text.muted,
-    align_h: hmUI.align.CENTER_H,
-  });
-
-  statusTextWidget = hmUI.createWidget(hmUI.widget.TEXT, {
-    x: 0,
-    y: 284,
+    y: 264,
     w: DEVICE_WIDTH,
     h: 32,
-    text: getStatusText(remaining),
-    text_size: 24,
+    text: formatTime(ts.durationSeconds),
+    text_size: 26,
     color: COLORS.text.muted,
     align_h: hmUI.align.CENTER_H,
   });
@@ -730,12 +691,12 @@ Page({
     timerId = null;
     vibrateIntervalId = null;
     completionWidgets = [];
-    progressArc = null;
+    dashWidgets = [];
+    litCount = DASH_COUNT;
     clockWidget = null;
     modeLabelWidget = null;
     countdownWidget = null;
     totalDurationWidget = null;
-    statusTextWidget = null;
     cancelBtnBg = null;
     cancelBtnIcon = null;
     cancelHitbox = null;
@@ -813,9 +774,6 @@ Page({
   build() {
     console.log('[Timer] build, mode:', ts.mode, 'completed:', ts.isCompleted);
 
-    const ringColor = ts.mode === 'focus' ? COLORS.focus.ring : COLORS.break.ring;
-    const trackColor = ts.mode === 'focus' ? COLORS.focus.track : COLORS.break.track;
-
     // ── Background ──
     hmUI.createWidget(hmUI.widget.FILL_RECT, {
       x: 0,
@@ -825,40 +783,15 @@ Page({
       color: COLORS.bg,
     });
 
-    // ── Ring track (full dark circle) ──
-    hmUI.createWidget(hmUI.widget.ARC, {
-      x: 0,
-      y: 0,
-      w: DEVICE_WIDTH,
-      h: 480,
-      start_angle: 0,
-      end_angle: 360,
-      color: trackColor,
-      line_width: 12,
-    });
-
-    // ── Progress arc (drains from full as time passes) ──
-    const remaining = getRemainingSeconds();
-    const initProgress = ts.durationSeconds > 0 ? remaining / ts.durationSeconds : 0;
-    const initEndAngle = ts.isCompleted ? 270 : Math.max(-89, -90 + initProgress * 360);
-
-    progressArc = hmUI.createWidget(hmUI.widget.ARC, {
-      x: 0,
-      y: 0,
-      w: DEVICE_WIDTH,
-      h: 480,
-      start_angle: -90,
-      end_angle: initEndAngle,
-      color: ringColor,
-      line_width: 12,
-    });
+    // ── Dashed progress ring ──
+    buildDashRing();
 
     // ── Running state widgets ──
     buildRunningState();
 
     if (ts.isCompleted) {
       // Recovered after already completing — show completion state directly
-      setRunningVisible(false);
+      setCancelVisible(false);
       buildCompletionOverlay();
     } else {
       startTick();
@@ -883,6 +816,7 @@ Page({
     stopTick();
     stopVibrations();
     timeSensor = null;
+    totalDurationWidget = null;
     // Note: don't stop the service here — it should keep running for focus mode
   },
 });

@@ -19,8 +19,7 @@ const KEYS = {
   TIMER_STATE: 'pokus_timer_state',
   NUDGE_ALARM_ID: 'pokus_nudge_alarm',
   ACCUMULATED_FOCUS: 'pokus_accumulated_focus', // Accumulated focus for encounter trigger
-  RECENT_FOCUS: 'pokus_recent_focus', // Recent focus durations (array of seconds, max 3)
-  RECENT_BREAK: 'pokus_recent_break', // Recent break durations (array of seconds, max 3)
+  RECENT_TIMERS: 'pokus_recent_timers', // Recent timer durations shared across modes (array of seconds, max 4)
   // Settings keys (shared across modes)
   SETTINGS_FOCUS_GOAL: 'pokus_focus_goal',
   SETTINGS_NUDGE_ENABLED: 'pokus_nudge_enabled',
@@ -480,15 +479,14 @@ export function deductAccumulatedFocus(seconds) {
 // =============================================================================
 
 /**
- * Get recent timer durations for a mode
- * @param {'focus'|'break'} mode
+ * Get recent timer durations (shared across focus and break)
  * @returns {number[]} Array of seconds (most recent first, max 3)
  */
-export function getRecentTimers(mode) {
+export function getRecentTimers() {
   try {
-    const key = mode === 'break' ? KEYS.RECENT_BREAK : KEYS.RECENT_FOCUS;
-    const val = storage.getItem(getKey(key), []);
-    return Array.isArray(val) ? val : [];
+    const val = storage.getItem(getKey(KEYS.RECENT_TIMERS), []);
+    if (!Array.isArray(val)) return [];
+    return val.filter((s) => typeof s === 'number' && Number.isFinite(s) && s > 0);
   } catch (e) {
     console.log('getRecentTimers error:', e);
     return [];
@@ -496,21 +494,20 @@ export function getRecentTimers(mode) {
 }
 
 /**
- * Save a timer duration to recent list for the given mode
+ * Save a timer duration to the shared recent list
  * Deduplicates and keeps most recent first, max 3 entries
- * @param {'focus'|'break'} mode
  * @param {number} seconds
  */
-export function saveRecentTimer(mode, seconds) {
+export function saveRecentTimer(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return;
   try {
-    const key = mode === 'break' ? KEYS.RECENT_BREAK : KEYS.RECENT_FOCUS;
-    const existing = getRecentTimers(mode);
+    const existing = getRecentTimers();
     // Deduplicate: remove if already in list
     const filtered = existing.filter((s) => s !== seconds);
-    // Prepend new entry, keep max 3
-    const updated = [seconds, ...filtered].slice(0, 3);
-    storage.setItem(getKey(key), updated);
-    console.log('saveRecentTimer:', mode, seconds, 'list:', updated);
+    // Prepend new entry, keep max 4
+    const updated = [seconds, ...filtered].slice(0, 4);
+    storage.setItem(getKey(KEYS.RECENT_TIMERS), updated);
+    console.log('saveRecentTimer:', seconds, 'list:', updated);
   } catch (e) {
     console.log('saveRecentTimer error:', e);
   }
@@ -699,8 +696,7 @@ export function resetAllProgress() {
 
     // Clear accumulated focus and recent timers
     storage.setItem(getKey(KEYS.ACCUMULATED_FOCUS), 0);
-    storage.setItem(getKey(KEYS.RECENT_FOCUS), []);
-    storage.setItem(getKey(KEYS.RECENT_BREAK), []);
+    storage.setItem(getKey(KEYS.RECENT_TIMERS), []);
 
     console.log('resetAllProgress: All progress data cleared for', mode, 'mode');
   } catch (e) {

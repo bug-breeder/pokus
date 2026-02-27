@@ -1,6 +1,7 @@
 /**
  * Timer Select Page
  * Mode selection screen with FOCUS | BREAK tabs, recent timers, presets, and custom duration.
+ * Content scrolls in SCROLL_LIST; + button is fixed at the bottom.
  */
 
 import hmUI from '@zos/ui';
@@ -14,28 +15,45 @@ const CX = DEVICE_WIDTH / 2; // 240
 const COLORS = {
   bg: 0x000000,
   text: { primary: 0xffffff, muted: 0x8e8e93 },
-  focus: 0x0a84ff,
-  break: 0x30d158,
   tabActive: { focus: 0x0a84ff, break: 0x30d158 },
   tabInactive: 0x2c2c2e,
-  card: 0x1c1c1e,
-  cardRing: { focus: 0x0a2040, break: 0x0a2010 },
-  pill: 0x2c2c2e,
-  plusArea: 0x0a0a0a,
 };
+
+const CIRCLE_SIZE = 140;
+const CIRCLE_GAP = 28;
+const CIRCLE_LEFT_X = (DEVICE_WIDTH - 2 * CIRCLE_SIZE - CIRCLE_GAP) / 2; // 86
+const CIRCLE_RIGHT_X = CIRCLE_LEFT_X + CIRCLE_SIZE + CIRCLE_GAP; // 254
+
+// Layout zones
+const CONTENT_Y = 162; // below tabs
+const PLUS_BAR_Y = 400; // fixed bar starts here
+const PLUS_BAR_H = 80;
+const LIST_H = PLUS_BAR_Y - CONTENT_Y; // 238
 
 // ============================================================================
 // Module state
 // ============================================================================
 
+// Switch geometry
+const SW_W = 320; // pill track width
+const SW_H = 64; // pill track height
+const SW_X = CX - SW_W / 2; // 80
+const SW_Y = 90;
+const KNOB_W = SW_W / 2 - 4; // 156 — half-pill knob
+const KNOB_H = SW_H - 8; // 56
+const KNOB_RADIUS = KNOB_H / 2; // 28
+const KNOB_FOCUS_X = SW_X + 4; // 84 — left position
+const KNOB_BREAK_X = SW_X + SW_W / 2; // 240 — right position
+
 let currentMode = 'focus';
-let contentWidgets = []; // All mode-specific or picker-specific widgets
-let tabWidgets = { focusBg: null, breakBg: null };
-let plusBg = null;
-let plusText = null;
+let switchKnob = null;
+let scrollListWidget = null;
+let scrollListData = [];
+let plusBarIcon = null;
+let contentWidgets = [];
 let customPickerMode = false;
 let customMinutes = 5;
-let customMinutesText = null; // ref for live update
+let customMinutesText = null;
 
 // ============================================================================
 // Helpers
@@ -44,12 +62,12 @@ let customMinutesText = null; // ref for live update
 function formatDuration(seconds) {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
-  if (secs === 0) return `${String(mins).padStart(2, '0')}:00`;
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 function selectDuration(seconds) {
-  saveRecentTimer(currentMode, seconds);
+  if (seconds <= 0) return;
+  saveRecentTimer(seconds);
   const isBreak = currentMode === 'break';
   push({
     url: 'pages/timer/index',
@@ -62,11 +80,16 @@ function selectDuration(seconds) {
   });
 }
 
-function deleteContentWidgets() {
+function cw(widget) {
+  contentWidgets.push(widget);
+  return widget;
+}
+
+function clearContentWidgets() {
   for (const w of contentWidgets) {
     try {
       hmUI.deleteWidget(w);
-    } catch (e) {
+    } catch {
       // ignore
     }
   }
@@ -75,378 +98,382 @@ function deleteContentWidgets() {
 }
 
 // ============================================================================
+// SCROLL_LIST data builders
+// ============================================================================
+
+function buildScrollListData(mode) {
+  const recentTimers = getRecentTimers();
+  const presets = mode === 'focus' ? FOCUS_PRESET_MINUTES : BREAK_PRESET_MINUTES;
+  const circleImg = mode === 'focus' ? 'raw/icons/circle-focus.png' : 'raw/icons/circle-break.png';
+  const items = [];
+
+  // Recent section (only if there are recent timers)
+  if (recentTimers.length > 0) {
+    items.push({ _type: 1, label: 'Recent' });
+    for (let i = 0; i < recentTimers.length; i += 2) {
+      const leftSecs = recentTimers[i];
+      const rightSecs = recentTimers[i + 1] || 0;
+      items.push({
+        _type: 2,
+        leftLabel: formatDuration(leftSecs),
+        leftSecs,
+        leftImg: circleImg,
+        rightLabel: rightSecs ? formatDuration(rightSecs) : '',
+        rightSecs,
+        rightImg: rightSecs ? circleImg : '',
+      });
+    }
+  }
+
+  // Presets section
+  items.push({ _type: 1, label: 'Presets' });
+  for (let i = 0; i < presets.length; i += 2) {
+    const leftMins = presets[i];
+    const rightMins = presets[i + 1] || 0;
+    items.push({
+      _type: 2,
+      leftLabel: formatDuration(leftMins * 60),
+      leftSecs: leftMins * 60,
+      leftImg: circleImg,
+      rightLabel: rightMins ? formatDuration(rightMins * 60) : '',
+      rightSecs: rightMins ? rightMins * 60 : 0,
+      rightImg: rightMins ? circleImg : '',
+    });
+  }
+
+  return items;
+}
+
+function buildTypeConfig(items) {
+  if (items.length === 0) return [{ start: 0, end: 0, type_id: 1 }];
+  const configs = [];
+  let start = 0;
+  let curType = items[0]._type;
+  for (let i = 1; i <= items.length; i++) {
+    const t = i < items.length ? items[i]._type : null;
+    if (i === items.length || t !== curType) {
+      configs.push({ start, end: i - 1, type_id: curType });
+      start = i;
+      curType = t;
+    }
+  }
+  return configs;
+}
+
+// ============================================================================
+// Scroll list create / destroy
+// ============================================================================
+
+function createScrollList(mode) {
+  const items = buildScrollListData(mode);
+  scrollListData = items;
+  const typeConfig = buildTypeConfig(items);
+
+  scrollListWidget = hmUI.createWidget(hmUI.widget.SCROLL_LIST, {
+    x: 0,
+    y: CONTENT_Y,
+    w: DEVICE_WIDTH,
+    h: LIST_H,
+    item_space: 0,
+    snap_to_center: false,
+
+    item_config: [
+      // Type 1 — section label row (h=56)
+      {
+        type_id: 1,
+        item_height: 56,
+        item_bg_color: 0x000000,
+        item_bg_radius: 0,
+        text_view: [
+          {
+            x: 48,
+            y: 12,
+            w: 384,
+            h: 32,
+            key: 'label',
+            color: 0x8e8e93,
+            text_size: 32,
+          },
+        ],
+        text_view_count: 1,
+        image_view: [],
+        image_view_count: 0,
+      },
+      // Type 2 — two-circle row (h=172)
+      {
+        type_id: 2,
+        item_height: 172,
+        item_bg_color: 0x000000,
+        item_bg_radius: 0,
+        image_view: [
+          {
+            x: CIRCLE_LEFT_X,
+            y: 8,
+            w: CIRCLE_SIZE,
+            h: CIRCLE_SIZE,
+            key: 'leftImg',
+            action: true,
+          },
+          {
+            x: CIRCLE_RIGHT_X,
+            y: 8,
+            w: CIRCLE_SIZE,
+            h: CIRCLE_SIZE,
+            key: 'rightImg',
+            action: true,
+          },
+        ],
+        image_view_count: 2,
+        text_view: [
+          {
+            x: CIRCLE_LEFT_X,
+            y: 8,
+            w: CIRCLE_SIZE,
+            h: CIRCLE_SIZE,
+            key: 'leftLabel',
+            color: 0xffffff,
+            text_size: 36,
+            align_h: hmUI.align.CENTER_H,
+            align_v: hmUI.align.CENTER_V,
+          },
+          {
+            x: CIRCLE_RIGHT_X,
+            y: 8,
+            w: CIRCLE_SIZE,
+            h: CIRCLE_SIZE,
+            key: 'rightLabel',
+            color: 0xffffff,
+            text_size: 36,
+            align_h: hmUI.align.CENTER_H,
+            align_v: hmUI.align.CENTER_V,
+          },
+        ],
+        text_view_count: 2,
+      },
+    ],
+    item_config_count: 2,
+
+    data_type_config: typeConfig,
+    data_type_config_count: typeConfig.length,
+    data_array: items,
+    data_count: items.length,
+
+    item_click_func: (list, index, data_key) => {
+      console.log('[TimerSelect] click:', index, data_key);
+      if (customPickerMode) return;
+      const item = scrollListData[index];
+      if (!item || item._type !== 2) return;
+      if (data_key === 'leftImg' || data_key === 'leftLabel') {
+        if (item.leftSecs > 0) selectDuration(item.leftSecs);
+      } else if (data_key === 'rightImg' || data_key === 'rightLabel') {
+        if (item.rightSecs > 0) selectDuration(item.rightSecs);
+      }
+    },
+  });
+}
+
+function destroyScrollList() {
+  if (scrollListWidget) {
+    try {
+      hmUI.deleteWidget(scrollListWidget);
+    } catch {
+      // ignore
+    }
+    scrollListWidget = null;
+  }
+}
+
+// ============================================================================
 // Tab management
 // ============================================================================
 
-function updateTabs(mode) {
-  if (tabWidgets.focusBg) {
-    tabWidgets.focusBg.setProperty(
-      hmUI.prop.COLOR,
-      mode === 'focus' ? COLORS.tabActive.focus : COLORS.tabInactive
-    );
-  }
-  if (tabWidgets.breakBg) {
-    tabWidgets.breakBg.setProperty(
-      hmUI.prop.COLOR,
-      mode === 'break' ? COLORS.tabActive.break : COLORS.tabInactive
-    );
-  }
+function updateSwitch(mode) {
+  if (!switchKnob) return;
+  switchKnob.setProperty(hmUI.prop.X, mode === 'focus' ? KNOB_FOCUS_X : KNOB_BREAK_X);
+  switchKnob.setProperty(
+    hmUI.prop.COLOR,
+    mode === 'focus' ? COLORS.tabActive.focus : COLORS.tabActive.break
+  );
 }
 
 function switchMode(newMode) {
   if (newMode === currentMode && !customPickerMode) return;
-  customPickerMode = false;
-  updatePlusButton(false);
-  deleteContentWidgets();
-  currentMode = newMode;
-  updateTabs(newMode);
-  buildNormalContent(newMode);
-}
 
-// ============================================================================
-// Plus button toggle
-// ============================================================================
-
-function updatePlusButton(isClose) {
-  if (plusBg) {
-    plusBg.setProperty(hmUI.prop.COLOR, isClose ? 0x3a3a3a : 0x2c2c2e);
-  }
-  if (plusText) {
-    plusText.setProperty(hmUI.prop.TEXT, isClose ? '×' : '+');
-  }
-}
-
-function toggleCustomPicker() {
+  // Exit picker if open — destroy picker widgets and recreate scroll list
   if (customPickerMode) {
     customPickerMode = false;
-    updatePlusButton(false);
-    deleteContentWidgets();
-    buildNormalContent(currentMode);
-  } else {
-    customPickerMode = true;
-    customMinutes = 5;
-    updatePlusButton(true);
-    deleteContentWidgets();
-    buildCustomPicker();
+    clearContentWidgets();
+    if (plusBarIcon) plusBarIcon.setProperty(hmUI.prop.SRC, 'raw/icons/plus-solid.png');
+    createScrollList(newMode);
+    currentMode = newMode;
+    updateSwitch(newMode);
+    return;
+  }
+
+  currentMode = newMode;
+  updateSwitch(newMode);
+
+  // Refresh scroll list data in-place
+  const items = buildScrollListData(newMode);
+  scrollListData = items;
+  const typeConfig = buildTypeConfig(items);
+
+  if (scrollListWidget) {
+    scrollListWidget.setProperty(hmUI.prop.UPDATE_DATA, {
+      data_type_config: typeConfig,
+      data_type_config_count: typeConfig.length,
+      data_array: items,
+      data_count: items.length,
+      on_page: 0,
+    });
   }
 }
 
 // ============================================================================
-// Normal content (recents + presets)
+// Custom duration picker
 // ============================================================================
 
-function buildNormalContent(mode) {
-  const recentTimers = getRecentTimers(mode);
-  let nextY = 125;
+function openCustomPicker() {
+  customPickerMode = true;
+  customMinutes = 5;
+  clearContentWidgets();
 
-  // ── Recent section ──
-  if (recentTimers.length > 0) {
-    const recentLabel = hmUI.createWidget(hmUI.widget.TEXT, {
-      x: 48,
-      y: nextY,
-      w: 200,
-      h: 28,
-      text: 'Recent',
-      text_size: 22,
+  // Delete scroll list so it doesn't show through (VISIBLE prop not supported on SCROLL_LIST)
+  destroyScrollList();
+  if (plusBarIcon) plusBarIcon.setProperty(hmUI.prop.SRC, 'raw/icons/check.png');
+
+  // Background fill for content area
+  cw(
+    hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x: 0,
+      y: CONTENT_Y,
+      w: DEVICE_WIDTH,
+      h: LIST_H,
+      color: COLORS.bg,
+    })
+  );
+
+  // Panel card
+  cw(
+    hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x: 60,
+      y: CONTENT_Y + 16,
+      w: 360,
+      h: 168,
+      radius: 24,
+      color: 0x1c1c1e,
+    })
+  );
+
+  // "Custom Duration" label
+  cw(
+    hmUI.createWidget(hmUI.widget.TEXT, {
+      x: 60,
+      y: CONTENT_Y + 32,
+      w: 360,
+      h: 32,
+      text: 'Custom Duration',
+      text_size: 26,
       color: COLORS.text.muted,
-    });
-    contentWidgets.push(recentLabel);
+      align_h: hmUI.align.CENTER_H,
+    })
+  );
 
-    nextY += 34;
-    const cardSize = 110;
-    const cardGap = 14;
-    const totalW = recentTimers.length * cardSize + (recentTimers.length - 1) * cardGap;
-    const cardStartX = CX - totalW / 2;
-
-    recentTimers.forEach((seconds, i) => {
-      const cx = cardStartX + i * (cardSize + cardGap);
-      const cy = nextY;
-
-      const cardBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-        x: cx,
-        y: cy,
-        w: cardSize,
-        h: cardSize,
-        radius: cardSize / 2,
-        color: COLORS.card,
-      });
-      contentWidgets.push(cardBg);
-
-      const arcRing = hmUI.createWidget(hmUI.widget.ARC, {
-        x: cx,
-        y: cy,
-        w: cardSize,
-        h: cardSize,
-        start_angle: 0,
-        end_angle: 360,
-        color: mode === 'focus' ? COLORS.cardRing.focus : COLORS.cardRing.break,
-        line_width: 4,
-      });
-      contentWidgets.push(arcRing);
-
-      const timeText = hmUI.createWidget(hmUI.widget.TEXT, {
-        x: cx,
-        y: cy + 36,
-        w: cardSize,
-        h: 38,
-        text: formatDuration(seconds),
-        text_size: 24,
-        color: COLORS.text.primary,
-        align_h: hmUI.align.CENTER_H,
-      });
-      contentWidgets.push(timeText);
-
-      const hitbox = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-        x: cx,
-        y: cy,
-        w: cardSize,
-        h: cardSize,
-        radius: cardSize / 2,
-        color: 0x000000,
-        alpha: 0,
-      });
-      hitbox.addEventListener(hmUI.event.CLICK_UP, () => {
-        selectDuration(seconds);
-      });
-      contentWidgets.push(hitbox);
-    });
-
-    nextY += cardSize + 16;
-  }
-
-  // ── Presets section ──
-  const presetsLabel = hmUI.createWidget(hmUI.widget.TEXT, {
-    x: 48,
-    y: nextY,
-    w: 200,
-    h: 28,
-    text: 'Presets',
-    text_size: 22,
-    color: COLORS.text.muted,
-  });
-  contentWidgets.push(presetsLabel);
-
-  nextY += 34;
-  const presets = mode === 'focus' ? FOCUS_PRESET_MINUTES : BREAK_PRESET_MINUTES;
-  const pillW = 118;
-  const pillH = 44;
-  const pillGapX = 11;
-  const pillGapY = 10;
-  const pillsPerRow = 3;
-  const rowW = pillsPerRow * pillW + (pillsPerRow - 1) * pillGapX;
-  const pillStartX = CX - rowW / 2;
-
-  presets.forEach((mins, i) => {
-    const row = Math.floor(i / pillsPerRow);
-    const col = i % pillsPerRow;
-    const px = pillStartX + col * (pillW + pillGapX);
-    const py = nextY + row * (pillH + pillGapY);
-    const seconds = mins * 60;
-
-    const pillBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-      x: px,
-      y: py,
-      w: pillW,
-      h: pillH,
-      radius: pillH / 2,
-      color: COLORS.pill,
-    });
-    contentWidgets.push(pillBg);
-
-    const pillLabel = hmUI.createWidget(hmUI.widget.TEXT, {
-      x: px,
-      y: py,
-      w: pillW,
-      h: pillH,
-      text: `${mins}m`,
-      text_size: 24,
+  // ── Minus (−) ──
+  const btnY = CONTENT_Y + 80;
+  cw(
+    hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x: 80,
+      y: btnY,
+      w: 76,
+      h: 76,
+      radius: 38,
+      color: 0x2c2c2e,
+    })
+  );
+  cw(
+    hmUI.createWidget(hmUI.widget.TEXT, {
+      x: 80,
+      y: btnY,
+      w: 76,
+      h: 76,
+      text: '\u2212',
+      text_size: 42,
       color: COLORS.text.primary,
       align_h: hmUI.align.CENTER_H,
       align_v: hmUI.align.CENTER_V,
-    });
-    contentWidgets.push(pillLabel);
-
-    const pillHit = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-      x: px,
-      y: py,
-      w: pillW,
-      h: pillH,
-      radius: pillH / 2,
+    })
+  );
+  cw(
+    hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x: 68,
+      y: btnY - 12,
+      w: 100,
+      h: 100,
       color: 0x000000,
       alpha: 0,
-    });
-    pillHit.addEventListener(hmUI.event.CLICK_UP, () => {
-      selectDuration(seconds);
-    });
-    contentWidgets.push(pillHit);
-  });
-}
-
-// ============================================================================
-// Custom picker (overlays the content area)
-// ============================================================================
-
-function buildCustomPicker() {
-  // Panel background
-  const panelBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-    x: 60,
-    y: 150,
-    w: 360,
-    h: 210,
-    radius: 24,
-    color: 0x1c1c1e,
-  });
-  contentWidgets.push(panelBg);
-
-  // Header
-  const header = hmUI.createWidget(hmUI.widget.TEXT, {
-    x: 60,
-    y: 168,
-    w: 360,
-    h: 28,
-    text: 'Custom Duration',
-    text_size: 22,
-    color: COLORS.text.muted,
-    align_h: hmUI.align.CENTER_H,
-  });
-  contentWidgets.push(header);
-
-  // Minus button
-  const minusBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-    x: 84,
-    y: 210,
-    w: 60,
-    h: 60,
-    radius: 30,
-    color: 0x2c2c2e,
-  });
-  contentWidgets.push(minusBg);
-
-  const minusLabel = hmUI.createWidget(hmUI.widget.TEXT, {
-    x: 84,
-    y: 210,
-    w: 60,
-    h: 60,
-    text: '−',
-    text_size: 34,
-    color: COLORS.text.primary,
-    align_h: hmUI.align.CENTER_H,
-    align_v: hmUI.align.CENTER_V,
-  });
-  contentWidgets.push(minusLabel);
-
-  const minusHit = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-    x: 74,
-    y: 200,
-    w: 80,
-    h: 80,
-    color: 0x000000,
-    alpha: 0,
-  });
-  minusHit.addEventListener(hmUI.event.CLICK_UP, () => {
+    })
+  ).addEventListener(hmUI.event.CLICK_UP, () => {
     if (customMinutes > 1) {
       customMinutes--;
-      if (customMinutesText) {
-        customMinutesText.setProperty(hmUI.prop.TEXT, `${customMinutes}m`);
-      }
+      if (customMinutesText) customMinutesText.setProperty(hmUI.prop.TEXT, `${customMinutes}m`);
     }
   });
-  contentWidgets.push(minusHit);
 
-  // Minutes display
-  customMinutesText = hmUI.createWidget(hmUI.widget.TEXT, {
-    x: 155,
-    y: 210,
-    w: 170,
-    h: 60,
-    text: `${customMinutes}m`,
-    text_size: 36,
-    color: COLORS.text.primary,
-    align_h: hmUI.align.CENTER_H,
-    align_v: hmUI.align.CENTER_V,
-  });
-  contentWidgets.push(customMinutesText);
+  // ── Value display ──
+  customMinutesText = cw(
+    hmUI.createWidget(hmUI.widget.TEXT, {
+      x: 156,
+      y: btnY,
+      w: 168,
+      h: 76,
+      text: `${customMinutes}m`,
+      text_size: 46,
+      color: COLORS.text.primary,
+      align_h: hmUI.align.CENTER_H,
+      align_v: hmUI.align.CENTER_V,
+    })
+  );
 
-  // Plus button
-  const plusInnerBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-    x: 336,
-    y: 210,
-    w: 60,
-    h: 60,
-    radius: 30,
-    color: 0x2c2c2e,
-  });
-  contentWidgets.push(plusInnerBg);
-
-  const plusInnerLabel = hmUI.createWidget(hmUI.widget.TEXT, {
-    x: 336,
-    y: 210,
-    w: 60,
-    h: 60,
-    text: '+',
-    text_size: 34,
-    color: COLORS.text.primary,
-    align_h: hmUI.align.CENTER_H,
-    align_v: hmUI.align.CENTER_V,
-  });
-  contentWidgets.push(plusInnerLabel);
-
-  const plusInnerHit = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-    x: 326,
-    y: 200,
-    w: 80,
-    h: 80,
-    color: 0x000000,
-    alpha: 0,
-  });
-  plusInnerHit.addEventListener(hmUI.event.CLICK_UP, () => {
+  // ── Plus (+) ──
+  cw(
+    hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x: 324,
+      y: btnY,
+      w: 76,
+      h: 76,
+      radius: 38,
+      color: 0x2c2c2e,
+    })
+  );
+  cw(
+    hmUI.createWidget(hmUI.widget.TEXT, {
+      x: 324,
+      y: btnY,
+      w: 76,
+      h: 76,
+      text: '+',
+      text_size: 42,
+      color: COLORS.text.primary,
+      align_h: hmUI.align.CENTER_H,
+      align_v: hmUI.align.CENTER_V,
+    })
+  );
+  cw(
+    hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x: 312,
+      y: btnY - 12,
+      w: 100,
+      h: 100,
+      color: 0x000000,
+      alpha: 0,
+    })
+  ).addEventListener(hmUI.event.CLICK_UP, () => {
     if (customMinutes < 60) {
       customMinutes++;
-      if (customMinutesText) {
-        customMinutesText.setProperty(hmUI.prop.TEXT, `${customMinutes}m`);
-      }
+      if (customMinutesText) customMinutesText.setProperty(hmUI.prop.TEXT, `${customMinutes}m`);
     }
   });
-  contentWidgets.push(plusInnerHit);
-
-  // Start button
-  const startBgColor = currentMode === 'focus' ? COLORS.focus : COLORS.break;
-  const startBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-    x: 90,
-    y: 294,
-    w: 300,
-    h: 54,
-    radius: 27,
-    color: startBgColor,
-  });
-  contentWidgets.push(startBg);
-
-  const startLabel = hmUI.createWidget(hmUI.widget.TEXT, {
-    x: 90,
-    y: 294,
-    w: 300,
-    h: 54,
-    text: 'Start',
-    text_size: 28,
-    color: 0x000000,
-    align_h: hmUI.align.CENTER_H,
-    align_v: hmUI.align.CENTER_V,
-  });
-  contentWidgets.push(startLabel);
-
-  const startHit = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-    x: 90,
-    y: 294,
-    w: 300,
-    h: 54,
-    radius: 27,
-    color: 0x000000,
-    alpha: 0,
-  });
-  startHit.addEventListener(hmUI.event.CLICK_UP, () => {
-    selectDuration(customMinutes * 60);
-  });
-  contentWidgets.push(startHit);
 }
 
 // ============================================================================
@@ -457,23 +484,21 @@ Page({
   onInit(params) {
     console.log('[TimerSelect] onInit, params:', params);
 
-    // Accept a default mode from params (e.g., 'break' when coming from focus done)
     try {
       const p = params ? (typeof params === 'string' ? JSON.parse(params) : params) : {};
-      if (p.mode === 'break' || p.mode === 'focus') {
-        currentMode = p.mode;
-      }
-    } catch (e) {
+      if (p.mode === 'break' || p.mode === 'focus') currentMode = p.mode;
+    } catch {
       // use default mode
     }
 
-    // Reset picker state on each init
+    // Reset module state
     customPickerMode = false;
     customMinutes = 5;
     contentWidgets = [];
-    tabWidgets = { focusBg: null, breakBg: null };
-    plusBg = null;
-    plusText = null;
+    switchKnob = null;
+    scrollListWidget = null;
+    scrollListData = [];
+    plusBarIcon = null;
     customMinutesText = null;
 
     onGesture({
@@ -490,7 +515,7 @@ Page({
   build() {
     console.log('[TimerSelect] build, mode:', currentMode);
 
-    // ── Background ──
+    // Background — fixed 480px height prevents page-level scrolling
     hmUI.createWidget(hmUI.widget.FILL_RECT, {
       x: 0,
       y: 0,
@@ -504,143 +529,122 @@ Page({
       x: 0,
       y: 20,
       w: DEVICE_WIDTH,
-      h: 36,
+      h: 44,
       text: 'Timer',
-      text_size: 30,
+      text_size: 36,
       color: COLORS.text.primary,
       align_h: hmUI.align.CENTER_H,
     });
 
-    // ── Tabs ──
-    const tabW = 196;
-    const tabH = 48;
-    const tabY = 68;
-    const focusTabX = CX - tabW - 2; // left tab
-    const breakTabX = CX + 2; // right tab
-
-    tabWidgets.focusBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-      x: focusTabX,
-      y: tabY,
-      w: tabW,
-      h: tabH,
-      radius: tabH / 2,
-      color: currentMode === 'focus' ? COLORS.tabActive.focus : COLORS.tabInactive,
+    // ── Mode switch (Focus ← → Break) ──
+    // Track (pill background)
+    hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x: SW_X,
+      y: SW_Y,
+      w: SW_W,
+      h: SW_H,
+      radius: SW_H / 2,
+      color: COLORS.tabInactive,
     });
-
+    // Sliding knob
+    switchKnob = hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x: currentMode === 'focus' ? KNOB_FOCUS_X : KNOB_BREAK_X,
+      y: SW_Y + 4,
+      w: KNOB_W,
+      h: KNOB_H,
+      radius: KNOB_RADIUS,
+      color: currentMode === 'focus' ? COLORS.tabActive.focus : COLORS.tabActive.break,
+    });
+    // "Focus" label (left half)
     hmUI.createWidget(hmUI.widget.TEXT, {
-      x: focusTabX,
-      y: tabY,
-      w: tabW,
-      h: tabH,
-      text: 'FOCUS',
-      text_size: 24,
+      x: SW_X,
+      y: SW_Y,
+      w: SW_W / 2,
+      h: SW_H,
+      text: 'Focus',
+      text_size: 28,
       color: COLORS.text.primary,
       align_h: hmUI.align.CENTER_H,
       align_v: hmUI.align.CENTER_V,
     });
-
-    hmUI
-      .createWidget(hmUI.widget.FILL_RECT, {
-        x: focusTabX,
-        y: tabY,
-        w: tabW,
-        h: tabH,
-        radius: tabH / 2,
-        color: 0x000000,
-        alpha: 0,
-      })
-      .addEventListener(hmUI.event.CLICK_UP, () => {
-        switchMode('focus');
-      });
-
-    tabWidgets.breakBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-      x: breakTabX,
-      y: tabY,
-      w: tabW,
-      h: tabH,
-      radius: tabH / 2,
-      color: currentMode === 'break' ? COLORS.tabActive.break : COLORS.tabInactive,
-    });
-
+    // "Break" label (right half)
     hmUI.createWidget(hmUI.widget.TEXT, {
-      x: breakTabX,
-      y: tabY,
-      w: tabW,
-      h: tabH,
-      text: 'BREAK',
-      text_size: 24,
+      x: SW_X + SW_W / 2,
+      y: SW_Y,
+      w: SW_W / 2,
+      h: SW_H,
+      text: 'Break',
+      text_size: 28,
       color: COLORS.text.primary,
       align_h: hmUI.align.CENTER_H,
       align_v: hmUI.align.CENTER_V,
     });
-
+    // Left-half tap → Focus
     hmUI
       .createWidget(hmUI.widget.FILL_RECT, {
-        x: breakTabX,
-        y: tabY,
-        w: tabW,
-        h: tabH,
-        radius: tabH / 2,
+        x: SW_X,
+        y: SW_Y,
+        w: SW_W / 2,
+        h: SW_H,
         color: 0x000000,
         alpha: 0,
       })
-      .addEventListener(hmUI.event.CLICK_UP, () => {
-        switchMode('break');
-      });
+      .addEventListener(hmUI.event.CLICK_UP, () => switchMode('focus'));
+    // Right-half tap → Break
+    hmUI
+      .createWidget(hmUI.widget.FILL_RECT, {
+        x: SW_X + SW_W / 2,
+        y: SW_Y,
+        w: SW_W / 2,
+        h: SW_H,
+        color: 0x000000,
+        alpha: 0,
+      })
+      .addEventListener(hmUI.event.CLICK_UP, () => switchMode('break'));
 
-    // ── Plus button area (bottom) ──
+    // ── SCROLL_LIST (content, y=162 to y=400) ──
+    createScrollList(currentMode);
+
+    // ── Fixed + bar (y=400–480, always visible) ──
     hmUI.createWidget(hmUI.widget.FILL_RECT, {
       x: 0,
-      y: 392,
+      y: PLUS_BAR_Y,
       w: DEVICE_WIDTH,
-      h: 88,
-      color: COLORS.plusArea,
+      h: PLUS_BAR_H,
+      color: 0x1c1c1e,
     });
-
-    const plusSize = 56;
-    const plusX = CX - plusSize / 2;
-    const plusY = 404;
-
-    plusBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
-      x: plusX,
-      y: plusY,
-      w: plusSize,
-      h: plusSize,
-      radius: plusSize / 2,
-      color: 0x2c2c2e,
+    plusBarIcon = hmUI.createWidget(hmUI.widget.IMG, {
+      x: CX - 24,
+      y: PLUS_BAR_Y + (PLUS_BAR_H - 48) / 2,
+      w: 48,
+      h: 48,
+      src: 'raw/icons/plus-solid.png',
     });
-
-    plusText = hmUI.createWidget(hmUI.widget.TEXT, {
-      x: plusX,
-      y: plusY,
-      w: plusSize,
-      h: plusSize,
-      text: '+',
-      text_size: 32,
-      color: COLORS.text.primary,
-      align_h: hmUI.align.CENTER_H,
-      align_v: hmUI.align.CENTER_V,
-    });
-
+    // Clickable overlay on bar — acts as + or ✓ depending on picker state
     hmUI
       .createWidget(hmUI.widget.FILL_RECT, {
-        x: plusX - 12,
-        y: plusY - 12,
-        w: plusSize + 24,
-        h: plusSize + 24,
+        x: 0,
+        y: PLUS_BAR_Y,
+        w: DEVICE_WIDTH,
+        h: PLUS_BAR_H,
         color: 0x000000,
         alpha: 0,
       })
       .addEventListener(hmUI.event.CLICK_UP, () => {
-        toggleCustomPicker();
+        if (customPickerMode) {
+          selectDuration(customMinutes * 60);
+        } else {
+          openCustomPicker();
+        }
       });
-
-    // ── Initial content ──
-    buildNormalContent(currentMode);
   },
 
   onDestroy() {
     console.log('[TimerSelect] onDestroy');
     offGesture();
+    contentWidgets = [];
+    scrollListWidget = null;
+    plusBarIcon = null;
+    customMinutesText = null;
   },
 });
