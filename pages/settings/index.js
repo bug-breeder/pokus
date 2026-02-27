@@ -212,7 +212,7 @@ Page({
         y: currentY + SPACING.xs,
         w: CONTENT_WIDTH - CARD_PADDING * 2,
         h: TYPOGRAPHY.caption.lineHeight * 2,
-        text: '⚡ 1s encounter, 20 Pokémon\nSeparate save data',
+        text: '⚡ 5s encounter, 20 Pokémon\nSeparate save data',
         text_size: TYPOGRAPHY.caption.size,
         color: COLORS.accent.blue,
         align_h: hmUI.align.LEFT,
@@ -368,6 +368,7 @@ Page({
     const TOGGLE = { width: 64, height: 38, knobSize: 32, knobMargin: 3 };
     const toggleX = cardX + CONTENT_WIDTH - CARD_PADDING - TOGGLE.width;
     const toggleY = y + (ROW_HEIGHT - TOGGLE.height) / 2;
+    let currentValue = initialValue;
 
     hmUI.createWidget(hmUI.widget.FILL_RECT, {
       x: cardX,
@@ -421,13 +422,13 @@ Page({
         alpha: 0,
       })
       .addEventListener(hmUI.event.CLICK_UP, () => {
-        const newValue = !state.nudgeEnabled;
+        currentValue = !currentValue;
         state.widgets.toggleTrack?.setProperty(
           hmUI.prop.COLOR,
-          newValue ? COLORS.accent.green : COLORS.bg.tertiary
+          currentValue ? COLORS.accent.green : COLORS.bg.tertiary
         );
-        state.widgets.toggleKnob?.setProperty(hmUI.prop.X, newValue ? knobOnX : knobOffX);
-        onChange(newValue);
+        state.widgets.toggleKnob?.setProperty(hmUI.prop.X, currentValue ? knobOnX : knobOffX);
+        onChange(currentValue);
       });
 
     return y + ROW_HEIGHT;

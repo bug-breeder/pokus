@@ -1,164 +1,290 @@
 /**
- * Timer Page - ZUI/ZeppOS Design
- * Clean, minimal focus timer following system design language
+ * Timer Page (Unified Focus + Break)
+ * Drift-proof countdown timer that handles both Focus and Break modes.
  *
- * Color scheme:
- * - Before ready: Blue progress ring
- * - When ready: Green progress ring
- * - All text: White
+ * Params: { mode: 'focus'|'break', durationSeconds, canExtend, baseBreakSeconds }
  *
- * Background Service:
- * - Starts timer-service when session begins
- * - Service runs even after app exits
- * - Service handles nudge vibrations
+ * Running state: progress ring drains clockwise, countdown display, cancel button
+ * Completion: vibrate every 3s, action overlay (mode-dependent buttons)
  */
 
 import hmUI from '@zos/ui';
 import { push, replace } from '@zos/router';
-// getApp removed - using URL params instead of globalData
+import { queryPermission, requestPermission } from '@zos/app';
 import { setWakeUpRelaunch } from '@zos/display';
 import { start as startService, stop as stopService } from '@zos/app-service';
-import { queryPermission, requestPermission } from '@zos/app';
 import { Time } from '@zos/sensor';
-import { DEVICE_WIDTH, DEVICE_HEIGHT, getGameConfig, MIN_BREAK_TIME } from '../../utils/constants';
 import { set as setAlarm, cancel as cancelAlarm } from '@zos/alarm';
+import { DEVICE_WIDTH, getGameConfig } from '../../utils/constants';
 import {
   addCoins,
   addFocusTime,
   getTimerState,
   saveTimerState,
   clearTimerState,
-  getFlowRatio,
+  addAccumulatedFocus,
   getNudgeAlarmId,
   saveNudgeAlarmId,
   clearNudgeAlarmId,
   getNudgeInterval,
   isNudgeEnabled,
 } from '../../utils/storage';
+import { vibrateTimerDone, stopVibration } from '../../utils/vibration';
 
 // ============================================================================
-// Color Palette (Cohesive Design)
+// Constants
 // ============================================================================
+
+const CX = DEVICE_WIDTH / 2; // 240
+const TIMER_SERVICE_FILE = 'app-service/timer-service';
+const TICK_MS = 250;
 
 const COLORS = {
   bg: 0x000000,
-
-  // Text - all white for clarity
-  text: {
-    primary: 0xffffff,
-    muted: 0x8e8e93,
-  },
-
-  // Progress ring
-  ring: {
-    track: 0x0a1f0a, // Very dark green track
-    progress: 0x0a84ff, // Blue while counting
-    ready: 0x30d158, // Bright green when ready
-  },
-
-  // Button
-  button: {
-    bg: 0x2c2c2e,
-  },
+  text: { primary: 0xffffff, muted: 0x8e8e93 },
+  focus: { ring: 0x0a84ff, track: 0x0a1f2e },
+  break: { ring: 0x30d158, track: 0x0a1f0a },
+  button: { bg: 0x2c2c2e },
+  catch: 0xffcb05,
+  extend: 0x30d158,
 };
 
-// Layout constants
-const CX = DEVICE_WIDTH / 2;
-
 // ============================================================================
-// Timer Configuration
+// Module state
 // ============================================================================
 
-const TIMER_SERVICE_FILE = 'app-service/timer-service';
-const TICK_INTERVAL = 250;
+let ts = {
+  mode: 'focus',
+  durationSeconds: 300,
+  endTime: 0,
+  baseBreakSeconds: 0,
+  canExtend: false,
+  isCompleted: false,
+  serviceStarted: false,
+};
 
-// ============================================================================
-// Page State
-// ============================================================================
-
+let timerId = null;
+let vibrateIntervalId = null;
+let gameConfig = null;
 let timeSensor = null;
 
-let state = {
-  timerId: null,
-  startTime: null,
-  seconds: 0,
-  gameConfig: null, // Loaded on init based on dev mode
-  serviceStarted: false,
-  widgets: {
-    timer: null,
-    coins: null,
-    status: null,
-    progressArc: null,
-    clock: null,
-  },
-};
+// Dash ring constants
+// 36 × 10° = 360°; each dash is 8° arc at r=220 → ~30px along arc, 8px radially = elongated curved segment
+const DASH_COUNT = 36;
+const DASH_DEG = 8;
+const GAP_DEG = 2;
+const RING_LINE_WIDTH = 8;
+const RING_R = 220; // inset so strokes stay inside the circular screen
+const RING_X = CX - RING_R; // 20
+const RING_Y = CX - RING_R; // 20
+const RING_SIZE = RING_R * 2; // 440
 
-/**
- * Get current time as HH:MM string
- */
-function getCurrentTime() {
-  if (!timeSensor) {
-    timeSensor = new Time();
-  }
-  const hours = timeSensor.getHours();
-  const mins = timeSensor.getMinutes();
-  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+// Widget references (running state)
+let dashWidgets = []; // ARC widgets for the dashed ring
+let litCount = DASH_COUNT;
+let clockWidget = null;
+let modeLabelWidget = null;
+let countdownWidget = null;
+let totalDurationWidget = null;
+let cancelBtnBg = null;
+let cancelBtnIcon = null;
+let cancelHitbox = null;
+
+// Completion overlay widgets (deleted on restart/extend)
+let completionWidgets = [];
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function getRemainingSeconds() {
+  return Math.max(0, Math.round((ts.endTime - Date.now()) / 1000));
 }
 
-/**
- * Update clock widget
- */
-function updateClock() {
-  if (state.widgets.clock) {
-    state.widgets.clock.setProperty(hmUI.prop.TEXT, getCurrentTime());
-  }
-}
-
-/**
- * Format seconds as MM:SS or H:MM:SS
- */
 function formatTime(seconds) {
-  const hours = Math.floor(seconds / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
+  const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  }
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-/**
- * Calculate elapsed seconds from start time
- */
-function calcElapsedSeconds() {
-  if (!state.startTime) return 0;
-  return Math.round((Date.now() - state.startTime) / 1000);
+function getStatusText(remainingSeconds) {
+  if (remainingSeconds <= 0) return '';
+  const mins = Math.floor(remainingSeconds / 60);
+  const secs = remainingSeconds % 60;
+  if (mins > 0 && secs > 0) return `${mins}m ${secs}s left`;
+  if (mins > 0) return `${mins}m left`;
+  return `${secs}s left`;
 }
 
-/**
- * Start the background timer service
- */
-function startTimerService() {
-  if (state.serviceStarted) {
-    console.log('[Timer] Service already started');
-    return;
+function getCurrentTime() {
+  if (!timeSensor) timeSensor = new Time();
+  const h = timeSensor.getHours();
+  const m = timeSensor.getMinutes();
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// ============================================================================
+// Running state widget helpers
+// ============================================================================
+
+function setRunningVisible(visible) {
+  // TEXT widgets: blank/restore content — VISIBLE prop is unreliable on TEXT in ZeppOS
+  if (visible) {
+    const modeLabel = ts.mode === 'focus' ? 'Focus' : 'Break';
+    if (modeLabelWidget) modeLabelWidget.setProperty(hmUI.prop.TEXT, modeLabel);
+    if (countdownWidget)
+      countdownWidget.setProperty(hmUI.prop.TEXT, formatTime(getRemainingSeconds()));
+    if (totalDurationWidget)
+      totalDurationWidget.setProperty(hmUI.prop.TEXT, formatTime(ts.durationSeconds));
+    if (clockWidget) clockWidget.setProperty(hmUI.prop.TEXT, getCurrentTime());
+  } else {
+    if (modeLabelWidget) modeLabelWidget.setProperty(hmUI.prop.TEXT, '');
+    if (countdownWidget) countdownWidget.setProperty(hmUI.prop.TEXT, '');
+    if (totalDurationWidget) totalDurationWidget.setProperty(hmUI.prop.TEXT, '');
+    if (clockWidget) clockWidget.setProperty(hmUI.prop.TEXT, '');
   }
+  setCancelVisible(visible ? 1 : 0);
+}
 
+function setCancelVisible(visible) {
+  const vis = visible ? 1 : 0;
+  for (const w of [cancelBtnBg, cancelBtnIcon, cancelHitbox]) {
+    if (w)
+      try {
+        w.setProperty(hmUI.prop.VISIBLE, vis);
+      } catch {}
+  }
+}
+
+function deleteCompletionWidgets() {
+  for (const w of completionWidgets) {
+    try {
+      hmUI.deleteWidget(w);
+    } catch (e) {
+      // ignore
+    }
+  }
+  completionWidgets = [];
+}
+
+// ============================================================================
+// Dash ring helpers
+// ============================================================================
+
+function buildDashRing() {
+  const activeColor = ts.mode === 'focus' ? COLORS.focus.ring : COLORS.break.ring;
+  const trackColor = ts.mode === 'focus' ? COLORS.focus.track : COLORS.break.track;
+  const remaining = getRemainingSeconds();
+  const progress = ts.durationSeconds > 0 ? remaining / ts.durationSeconds : 0;
+  litCount = ts.isCompleted ? DASH_COUNT : Math.round(progress * DASH_COUNT);
+
+  dashWidgets = [];
+  for (let i = 0; i < DASH_COUNT; i++) {
+    const startAngle = -90 + i * (DASH_DEG + GAP_DEG);
+    const endAngle = startAngle + DASH_DEG;
+    dashWidgets.push(
+      hmUI.createWidget(hmUI.widget.ARC, {
+        x: RING_X,
+        y: RING_Y,
+        w: RING_SIZE,
+        h: RING_SIZE,
+        start_angle: startAngle,
+        end_angle: endAngle,
+        color: i < litCount ? activeColor : trackColor,
+        line_width: RING_LINE_WIDTH,
+      })
+    );
+  }
+}
+
+function updateDashRing(remaining) {
+  if (dashWidgets.length === 0) return;
+  const progress = ts.durationSeconds > 0 ? remaining / ts.durationSeconds : 0;
+  const newLit = Math.round(progress * DASH_COUNT);
+  if (newLit === litCount) return;
+
+  const activeColor = ts.mode === 'focus' ? COLORS.focus.ring : COLORS.break.ring;
+  const trackColor = ts.mode === 'focus' ? COLORS.focus.track : COLORS.break.track;
+  const lo = Math.min(newLit, litCount);
+  const hi = Math.max(newLit, litCount);
+  for (let i = lo; i < hi; i++) {
+    if (dashWidgets[i]) {
+      dashWidgets[i].setProperty(hmUI.prop.COLOR, i < newLit ? activeColor : trackColor);
+    }
+  }
+  litCount = newLit;
+}
+
+function setDashRingFull() {
+  if (dashWidgets.length === 0) return;
+  const activeColor = ts.mode === 'focus' ? COLORS.focus.ring : COLORS.break.ring;
+  for (let i = 0; i < DASH_COUNT; i++) {
+    if (dashWidgets[i]) dashWidgets[i].setProperty(hmUI.prop.COLOR, activeColor);
+  }
+  litCount = DASH_COUNT;
+}
+
+// ============================================================================
+// Timer tick
+// ============================================================================
+
+function updateRunningUI() {
+  const remaining = getRemainingSeconds();
+  if (countdownWidget) {
+    countdownWidget.setProperty(hmUI.prop.TEXT, formatTime(remaining));
+  }
+  updateDashRing(remaining);
+}
+
+function tick() {
+  const remaining = getRemainingSeconds();
+  updateRunningUI();
+  if (remaining <= 0 && !ts.isCompleted) {
+    onTimerComplete();
+  }
+}
+
+function startTick() {
+  if (timerId === null) {
+    timerId = setInterval(tick, TICK_MS);
+  }
+}
+
+function stopTick() {
+  if (timerId !== null) {
+    clearInterval(timerId);
+    timerId = null;
+  }
+}
+
+// ============================================================================
+// Background service & nudge alarm
+// ============================================================================
+
+function doStartService() {
   try {
-    // Check permission first
-    const permResult = queryPermission({ permissions: ['device:os.bg_service'] });
-    console.log('[Timer] Permission check:', permResult);
+    startService({
+      file: TIMER_SERVICE_FILE,
+      param: JSON.stringify({ startTime: Date.now() }),
+      complete_func: (info) => {
+        console.log('[Timer] Service start:', info.file, info.result);
+        ts.serviceStarted = info.result;
+      },
+    });
+  } catch (e) {
+    console.log('[Timer] doStartService error:', e);
+  }
+}
 
-    if (permResult && permResult[0] !== 2) {
-      // Need to request permission
+function startTimerService() {
+  if (ts.serviceStarted) return;
+  try {
+    const perm = queryPermission({ permissions: ['device:os.bg_service'] });
+    if (perm && perm[0] !== 2) {
       requestPermission({
         permissions: ['device:os.bg_service'],
-        callback: (results) => {
-          console.log('[Timer] Permission request result:', results);
-          if (results && results[0] === 2) {
-            doStartService();
-          }
+        callback: (r) => {
+          if (r && r[0] === 2) doStartService();
         },
       });
     } else {
@@ -169,36 +295,13 @@ function startTimerService() {
   }
 }
 
-/**
- * Actually start the service after permission is granted
- */
-function doStartService() {
-  try {
-    const result = startService({
-      file: TIMER_SERVICE_FILE,
-      param: JSON.stringify({ startTime: state.startTime }),
-      complete_func: (info) => {
-        console.log('[Timer] Service start callback:', info.file, info.result);
-        state.serviceStarted = info.result;
-      },
-      // Note: 'reload: true' requires API_LEVEL 4.0, default is true anyway
-    });
-    console.log('[Timer] Start service result:', result);
-  } catch (e) {
-    console.log('[Timer] doStartService error:', e);
-  }
-}
-
-/**
- * Stop the background timer service
- */
 function stopTimerService() {
   try {
     stopService({
       file: TIMER_SERVICE_FILE,
       complete_func: (info) => {
-        console.log('[Timer] Service stop callback:', info.file, info.result);
-        state.serviceStarted = false;
+        console.log('[Timer] Service stop:', info.file, info.result);
+        ts.serviceStarted = false;
       },
     });
   } catch (e) {
@@ -206,189 +309,364 @@ function stopTimerService() {
   }
 }
 
-/**
- * Cancel any existing nudge alarm
- */
 function cancelNudgeAlarm() {
   try {
-    const alarmId = getNudgeAlarmId();
-    if (alarmId) {
-      cancelAlarm(alarmId);
+    const id = getNudgeAlarmId();
+    if (id) {
+      cancelAlarm(id);
       clearNudgeAlarmId();
-      console.log('[Timer] Cancelled nudge alarm:', alarmId);
     }
   } catch (e) {
     console.log('[Timer] cancelNudgeAlarm error:', e);
   }
 }
 
-/**
- * Schedule the first nudge alarm (subsequent alarms are chained by nudge-service)
- */
 function scheduleFirstNudge() {
+  if (!isNudgeEnabled()) return;
   try {
-    // Check if nudges are enabled
-    if (!isNudgeEnabled()) {
-      console.log('[Timer] Nudges disabled, not scheduling');
-      return;
-    }
-
-    // Cancel any existing alarm first
     cancelNudgeAlarm();
-
-    // Get interval in minutes, convert to seconds
-    const intervalMinutes = getNudgeInterval();
-    const delaySeconds = intervalMinutes * 60;
-
-    // Schedule alarm to trigger nudge-service
-    const alarmId = setAlarm({
-      url: 'app-service/nudge-service',
-      delay: delaySeconds,
-    });
-
-    // Save alarm ID for later cancellation
-    saveNudgeAlarmId(alarmId);
-    console.log('[Timer] Scheduled first nudge in', intervalMinutes, 'minutes, alarm ID:', alarmId);
+    const delaySecs = getNudgeInterval() * 60;
+    const id = setAlarm({ url: 'app-service/nudge-service', delay: delaySecs });
+    saveNudgeAlarmId(id);
+    console.log('[Timer] Nudge scheduled in', getNudgeInterval(), 'min, id:', id);
   } catch (e) {
     console.log('[Timer] scheduleFirstNudge error:', e);
   }
 }
 
-/**
- * Calculate coins earned (1 coin per 5-min block)
- */
-function calcCoins(seconds) {
-  const config = state.gameConfig;
-  return Math.floor(seconds / config.ENCOUNTER_THRESHOLD) * config.COINS_PER_BLOCK;
-}
+// ============================================================================
+// Timer completion
+// ============================================================================
 
-/**
- * Format remaining time as "Xm Ys"
- */
-function formatRemaining(seconds) {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  if (mins > 0) {
-    return `${mins}m ${secs}s until encounter`;
-  }
-  return `${secs}s until encounter`;
-}
+function onTimerComplete() {
+  console.log('[Timer] Complete! mode:', ts.mode, 'duration:', ts.durationSeconds);
+  ts.isCompleted = true;
+  stopTick();
 
-/**
- * Update UI with current elapsed time
- */
-function updateUI() {
-  const config = state.gameConfig;
-  const seconds = state.seconds;
-  const coins = calcCoins(seconds);
-  const isReady = seconds >= config.ENCOUNTER_THRESHOLD;
-
-  // Timer text
-  if (state.widgets.timer) {
-    state.widgets.timer.setProperty(hmUI.prop.TEXT, formatTime(seconds));
+  if (ts.mode === 'focus') {
+    addFocusTime(ts.durationSeconds);
+    addAccumulatedFocus(ts.durationSeconds);
+    const coins = Math.floor(ts.durationSeconds / gameConfig.COIN_BLOCK_SECONDS);
+    if (coins > 0) addCoins(coins);
+    cancelNudgeAlarm();
+    stopTimerService();
   }
 
-  // Coins earned
-  if (state.widgets.coins) {
-    state.widgets.coins.setProperty(hmUI.prop.TEXT, `+${coins}`);
-  }
-
-  // Progress arc - Blue before ready, Green when ready
-  const progress = Math.min(seconds / config.ENCOUNTER_THRESHOLD, 1);
-  const endAngle = -90 + progress * 360;
-  if (state.widgets.progressArc) {
-    state.widgets.progressArc.setProperty(hmUI.prop.MORE, {
-      end_angle: endAngle,
-      color: isReady ? COLORS.ring.ready : COLORS.ring.progress,
-    });
-  }
-
-  // Status text - muted while counting, green when ready
-  if (state.widgets.status) {
-    if (isReady) {
-      state.widgets.status.setProperty(hmUI.prop.TEXT, 'Catch ready!');
-      state.widgets.status.setProperty(hmUI.prop.COLOR, COLORS.ring.ready);
-    } else {
-      const remaining = config.ENCOUNTER_THRESHOLD - seconds;
-      state.widgets.status.setProperty(hmUI.prop.TEXT, formatRemaining(remaining));
-      state.widgets.status.setProperty(hmUI.prop.COLOR, COLORS.text.muted);
-    }
-  }
-}
-
-/**
- * Timer tick (UI update only - timing is calculated from startTime)
- */
-function tick() {
-  const newSeconds = calcElapsedSeconds();
-  if (newSeconds !== state.seconds) {
-    state.seconds = newSeconds;
-    updateUI();
-  }
-}
-
-function startTimer() {
-  if (state.timerId === null) {
-    state.timerId = setInterval(tick, TICK_INTERVAL);
-  }
-}
-
-function stopTimer() {
-  if (state.timerId !== null) {
-    clearInterval(state.timerId);
-    state.timerId = null;
-  }
-}
-
-/**
- * End the focus session
- */
-function endSession() {
-  console.log('[Timer] endSession:', state.seconds, 'seconds');
-
-  stopTimer();
-  stopTimerService();
   clearTimerState();
-
-  // Cancel any pending nudge alarms
-  cancelNudgeAlarm();
-
-  const seconds = state.seconds;
-  const earnedCoins = calcCoins(seconds);
-
-  addCoins(earnedCoins);
-  if (seconds > 0) {
-    addFocusTime(seconds);
-  }
-
-  // Calculate break time based on Flowmodoro ratio
-  const flowRatio = getFlowRatio();
-  const breakSeconds = Math.floor(seconds / flowRatio);
-
-  console.log('[Timer] Focus:', seconds, 'Ratio:', flowRatio, 'Break:', breakSeconds);
-
   setWakeUpRelaunch({ relaunch: false });
 
-  // Check if eligible for encounter (met minimum focus time)
-  if (seconds >= state.gameConfig.ENCOUNTER_THRESHOLD) {
-    // If break time is long enough, go to break page first
-    if (breakSeconds >= MIN_BREAK_TIME) {
-      // Pass data via URL params (globalData is unreliable)
-      push({
-        url: 'pages/break/index',
-        params: JSON.stringify({
-          focusSeconds: seconds,
-          breakSeconds: breakSeconds,
-          earnedCoins: earnedCoins,
-        }),
-      });
-    } else {
-      // Short break, skip directly to encounter
-      push({ url: 'pages/encounter/index' });
-    }
+  // Light up all dashes (full ring on completion)
+  setDashRingFull();
+
+  // Hide only the cancel button — keep timer display visible
+  setCancelVisible(false);
+
+  // Start repeating vibration (every 3s until user acts)
+  vibrateTimerDone();
+  vibrateIntervalId = setInterval(vibrateTimerDone, 3000);
+
+  buildCompletionOverlay();
+}
+
+function stopVibrations() {
+  if (vibrateIntervalId !== null) {
+    clearInterval(vibrateIntervalId);
+    vibrateIntervalId = null;
+  }
+  stopVibration();
+}
+
+// ============================================================================
+// Completion overlay builders
+// ============================================================================
+
+// Create a circular icon button and push all sub-widgets into completionWidgets
+function makeIconBtn(x, y, size, bgColor, iconSrc, callback) {
+  const iconSize = Math.round(size * 0.55);
+  const iconOff = Math.round((size - iconSize) / 2);
+
+  completionWidgets.push(
+    hmUI.createWidget(hmUI.widget.FILL_RECT, {
+      x,
+      y,
+      w: size,
+      h: size,
+      radius: size / 2,
+      color: bgColor,
+    })
+  );
+
+  completionWidgets.push(
+    hmUI.createWidget(hmUI.widget.IMG, {
+      x: x + iconOff,
+      y: y + iconOff,
+      w: iconSize,
+      h: iconSize,
+      src: iconSrc,
+      auto_scale: true,
+      auto_scale_obj_fit: 1,
+    })
+  );
+
+  const hb = hmUI.createWidget(hmUI.widget.FILL_RECT, {
+    x,
+    y,
+    w: size,
+    h: size,
+    radius: size / 2,
+    color: 0x000000,
+    alpha: 0,
+  });
+  hb.addEventListener(hmUI.event.CLICK_UP, callback);
+  completionWidgets.push(hb);
+}
+
+function buildCompletionOverlay() {
+  // Crescent arc: 3 buttons placed along a circle of r=155 at the bottom of the screen.
+  // Angles from top clockwise: left=220°, center=180° (nadir), right=140°
+  // Action buttons (play/pause) are larger; dismiss X is smaller.
+  // Arc center coords: L=(140,359) C=(240,395) R=(340,359)
+  const A = 76; // action button size (play / pause)
+  const D = 64; // dismiss button size (x)
+  const L = { x: 140 - A / 2, y: 359 - A / 2 }; // { x:102, y:321 }
+  const C = { x: 240 - D / 2, y: 395 - D / 2 }; // { x:208, y:363 }
+  const R = { x: 340 - A / 2, y: 359 - A / 2 }; // { x:302, y:321 }
+
+  if (ts.mode === 'focus') {
+    // left=flame/blue(New Focus), center=x/dark(Dismiss), right=mug/green(Take Break)
+    makeIconBtn(L.x, L.y, A, COLORS.focus.ring, 'raw/icons/fire-white.png', handleNewFocus);
+    makeIconBtn(C.x, C.y, D, COLORS.button.bg, 'raw/icons/x.png', handleDismiss);
+    makeIconBtn(R.x, R.y, A, COLORS.break.ring, 'raw/icons/mug-white.png', handleTakeBreak);
   } else {
-    // Didn't meet minimum focus time, go home
-    replace({ url: 'pages/home/index' });
+    const extSecs = Math.floor(ts.baseBreakSeconds / 2);
+    if (ts.canExtend && extSecs > 0) {
+      // left=mug/green(Extend), center=x/dark(Dismiss), right=flame/blue(Start Focus)
+      makeIconBtn(L.x, L.y, A, COLORS.break.ring, 'raw/icons/mug-white.png', handleExtend);
+      makeIconBtn(C.x, C.y, D, COLORS.button.bg, 'raw/icons/x.png', handleDismiss);
+      makeIconBtn(R.x, R.y, A, COLORS.focus.ring, 'raw/icons/fire-white.png', handleStartFocus);
+    } else {
+      // 2 buttons: x/dark(Dismiss) at L arc + flame/blue(Start Focus) at R arc
+      makeIconBtn(L.x, L.y, D, COLORS.button.bg, 'raw/icons/x.png', handleDismiss);
+      makeIconBtn(R.x, R.y, A, COLORS.focus.ring, 'raw/icons/fire-white.png', handleStartFocus);
+    }
+  }
+}
+
+// ============================================================================
+// Action handlers
+// ============================================================================
+
+function handleDismiss() {
+  stopVibrations();
+  replace({ url: 'pages/timer-select/index' });
+}
+
+function handleCancel() {
+  if (ts.isCompleted) return;
+  stopTick();
+  stopVibrations();
+  if (ts.mode === 'focus') {
+    stopTimerService();
+    cancelNudgeAlarm();
+  }
+  clearTimerState();
+  setWakeUpRelaunch({ relaunch: false });
+  replace({ url: 'pages/timer-select/index' });
+}
+
+function handleNewFocus() {
+  if (!ts.isCompleted) return;
+  stopVibrations();
+  deleteCompletionWidgets();
+
+  ts.isCompleted = false;
+  ts.endTime = Date.now() + ts.durationSeconds * 1000;
+
+  saveTimerState({
+    mode: ts.mode,
+    startTime: Date.now(),
+    endTime: ts.endTime,
+    durationSeconds: ts.durationSeconds,
+    baseBreakSeconds: ts.baseBreakSeconds,
+    canExtend: ts.canExtend,
+    isRunning: true,
+  });
+
+  startTimerService();
+  scheduleFirstNudge();
+  setWakeUpRelaunch({ relaunch: true });
+
+  // Reset ring to full, update countdown, restore cancel button
+  setDashRingFull();
+  if (countdownWidget) {
+    countdownWidget.setProperty(hmUI.prop.TEXT, formatTime(ts.durationSeconds));
+  }
+  if (totalDurationWidget) {
+    totalDurationWidget.setProperty(hmUI.prop.TEXT, formatTime(ts.durationSeconds));
+  }
+  if (clockWidget) {
+    clockWidget.setProperty(hmUI.prop.TEXT, getCurrentTime());
+  }
+
+  setCancelVisible(true);
+  startTick();
+}
+
+function handleTakeBreak() {
+  if (!ts.isCompleted) return;
+  stopVibrations();
+  push({
+    url: 'pages/timer-select/index',
+    params: JSON.stringify({ mode: 'break' }),
+  });
+}
+
+function handleExtend() {
+  if (!ts.isCompleted) return;
+  stopVibrations();
+  deleteCompletionWidgets();
+
+  const extSecs = Math.floor(ts.baseBreakSeconds / 2);
+  ts.canExtend = false;
+  ts.isCompleted = false;
+  ts.durationSeconds = extSecs;
+  ts.endTime = Date.now() + extSecs * 1000;
+
+  saveTimerState({
+    mode: ts.mode,
+    startTime: Date.now(),
+    endTime: ts.endTime,
+    durationSeconds: ts.durationSeconds,
+    baseBreakSeconds: ts.baseBreakSeconds,
+    canExtend: false,
+    isRunning: true,
+  });
+  setWakeUpRelaunch({ relaunch: true });
+
+  setDashRingFull();
+  if (countdownWidget) {
+    countdownWidget.setProperty(hmUI.prop.TEXT, formatTime(extSecs));
+  }
+  if (totalDurationWidget) {
+    totalDurationWidget.setProperty(hmUI.prop.TEXT, formatTime(extSecs));
+  }
+  if (clockWidget) {
+    clockWidget.setProperty(hmUI.prop.TEXT, getCurrentTime());
+  }
+
+  setCancelVisible(true);
+  startTick();
+}
+
+function handleStartFocus() {
+  if (!ts.isCompleted) return;
+  stopVibrations();
+  replace({ url: 'pages/timer-select/index' });
+}
+
+// ============================================================================
+// Build running state widgets
+// ============================================================================
+
+function buildRunningState() {
+  const modeColor = ts.mode === 'focus' ? COLORS.focus.ring : COLORS.break.ring;
+  const modeLabel = ts.mode === 'focus' ? 'Focus' : 'Break';
+  const remaining = getRemainingSeconds();
+
+  clockWidget = hmUI.createWidget(hmUI.widget.TEXT, {
+    x: 0,
+    y: 36,
+    w: DEVICE_WIDTH,
+    h: 30,
+    text: getCurrentTime(),
+    text_size: 24,
+    color: COLORS.text.muted,
+    align_h: hmUI.align.CENTER_H,
+  });
+
+  modeLabelWidget = hmUI.createWidget(hmUI.widget.TEXT, {
+    x: 0,
+    y: 90,
+    w: DEVICE_WIDTH,
+    h: 44,
+    text: modeLabel,
+    text_size: 34,
+    color: modeColor,
+    align_h: hmUI.align.CENTER_H,
+  });
+
+  // Countdown (shifted up to leave room for crescent buttons)
+  countdownWidget = hmUI.createWidget(hmUI.widget.TEXT, {
+    x: 0,
+    y: 178,
+    w: DEVICE_WIDTH,
+    h: 92,
+    text: formatTime(remaining),
+    text_size: 78,
+    color: COLORS.text.primary,
+    align_h: hmUI.align.CENTER_H,
+  });
+
+  // Total duration shown small below countdown
+  totalDurationWidget = hmUI.createWidget(hmUI.widget.TEXT, {
+    x: 0,
+    y: 264,
+    w: DEVICE_WIDTH,
+    h: 32,
+    text: formatTime(ts.durationSeconds),
+    text_size: 26,
+    color: COLORS.text.muted,
+    align_h: hmUI.align.CENTER_H,
+  });
+
+  const btnSize = 76;
+  const iconSize = 52;
+  const btnX = CX - btnSize / 2;
+  const btnY = 356;
+
+  cancelBtnBg = hmUI.createWidget(hmUI.widget.FILL_RECT, {
+    x: btnX,
+    y: btnY,
+    w: btnSize,
+    h: btnSize,
+    radius: btnSize / 2,
+    color: COLORS.button.bg,
+  });
+
+  cancelBtnIcon = hmUI.createWidget(hmUI.widget.IMG, {
+    x: CX - iconSize / 2,
+    y: btnY + (btnSize - iconSize) / 2,
+    w: iconSize,
+    h: iconSize,
+    src: 'raw/icons/x.png',
+    auto_scale: true,
+    auto_scale_obj_fit: 1,
+  });
+
+  cancelHitbox = hmUI.createWidget(hmUI.widget.FILL_RECT, {
+    x: btnX - 16,
+    y: btnY - 16,
+    w: btnSize + 32,
+    h: btnSize + 32,
+    color: 0x000000,
+    alpha: 0,
+  });
+  cancelHitbox.addEventListener(hmUI.event.CLICK_UP, () => {
+    handleCancel();
+  });
+}
+
+// ============================================================================
+// Clock update
+// ============================================================================
+
+function updateClock() {
+  if (clockWidget) {
+    try {
+      clockWidget.setProperty(hmUI.prop.TEXT, getCurrentTime());
+    } catch (e) {
+      // ignore
+    }
   }
 }
 
@@ -397,214 +675,148 @@ function endSession() {
 // ============================================================================
 
 Page({
-  onInit() {
-    console.log('[Timer] onInit');
+  onInit(params) {
+    console.log('[Timer] onInit, params:', params);
 
-    // Get game config based on current mode (dev or normal)
-    state.gameConfig = getGameConfig();
-    console.log('[Timer] Mode:', state.gameConfig.ENCOUNTER_THRESHOLD === 1 ? 'DEV' : 'NORMAL');
+    // Reset module state
+    ts = {
+      mode: 'focus',
+      durationSeconds: 300,
+      endTime: 0,
+      baseBreakSeconds: 0,
+      canExtend: false,
+      isCompleted: false,
+      serviceStarted: false,
+    };
+    timerId = null;
+    vibrateIntervalId = null;
+    completionWidgets = [];
+    dashWidgets = [];
+    litCount = DASH_COUNT;
+    clockWidget = null;
+    modeLabelWidget = null;
+    countdownWidget = null;
+    totalDurationWidget = null;
+    cancelBtnBg = null;
+    cancelBtnIcon = null;
+    cancelHitbox = null;
 
-    setWakeUpRelaunch({ relaunch: true });
+    gameConfig = getGameConfig();
 
     // Initialize Time sensor for clock display
     timeSensor = new Time();
     timeSensor.onPerMinute(updateClock);
 
-    const savedState = getTimerState();
-    if (savedState && savedState.startTime) {
-      // Resume existing session
-      state.startTime = savedState.startTime;
-      state.seconds = calcElapsedSeconds();
-      console.log('[Timer] Resumed session, elapsed:', state.seconds);
-
-      // Try to start service in case it was killed
-      startTimerService();
-
-      // Re-schedule nudge alarm if none exists (alarm may have been cleared)
-      if (!getNudgeAlarmId()) {
-        scheduleFirstNudge();
-      }
-    } else {
-      // Start new session
-      state.startTime = Date.now();
-      state.seconds = 0;
-      saveTimerState({ startTime: state.startTime, isRunning: true });
-      startTimerService();
-
-      // Schedule the first nudge alarm
-      scheduleFirstNudge();
-
-      console.log('[Timer] New session started');
+    // Try to parse URL params (fresh start)
+    let parsedParams = null;
+    try {
+      parsedParams = params ? (typeof params === 'string' ? JSON.parse(params) : params) : null;
+    } catch (e) {
+      console.log('[Timer] params parse error:', e);
     }
 
-    state.timerId = null;
+    if (parsedParams && parsedParams.mode) {
+      // Fresh start from navigation params
+      ts.mode = parsedParams.mode;
+      ts.durationSeconds = parsedParams.durationSeconds || 300;
+      ts.canExtend = parsedParams.canExtend || false;
+      ts.baseBreakSeconds = parsedParams.baseBreakSeconds || ts.durationSeconds;
+      ts.endTime = Date.now() + ts.durationSeconds * 1000;
+
+      saveTimerState({
+        mode: ts.mode,
+        startTime: Date.now(),
+        endTime: ts.endTime,
+        durationSeconds: ts.durationSeconds,
+        baseBreakSeconds: ts.baseBreakSeconds,
+        canExtend: ts.canExtend,
+        isRunning: true,
+      });
+
+      if (ts.mode === 'focus') {
+        startTimerService();
+        scheduleFirstNudge();
+      }
+
+      setWakeUpRelaunch({ relaunch: true });
+      console.log('[Timer] New', ts.mode, 'timer:', ts.durationSeconds, 's');
+    } else {
+      // Attempt to recover from saved state (e.g., wrist-raise relaunch)
+      const saved = getTimerState();
+      if (saved && saved.endTime && saved.isRunning !== false) {
+        ts.mode = saved.mode || 'focus';
+        ts.endTime = saved.endTime;
+        ts.durationSeconds = saved.durationSeconds || 300;
+        ts.canExtend = saved.canExtend || false;
+        ts.baseBreakSeconds = saved.baseBreakSeconds || ts.durationSeconds;
+
+        // If already expired when recovered, mark as completed
+        if (Date.now() >= saved.endTime) {
+          ts.isCompleted = true;
+        }
+
+        if (ts.mode === 'focus' && !ts.isCompleted) {
+          startTimerService();
+          if (!getNudgeAlarmId()) scheduleFirstNudge();
+        }
+
+        setWakeUpRelaunch({ relaunch: true });
+        console.log('[Timer] Recovered', ts.mode, 'state, remaining:', getRemainingSeconds(), 's');
+      } else {
+        // No valid state, go to selection screen
+        console.log('[Timer] No valid state, redirecting to timer-select');
+        replace({ url: 'pages/timer-select/index' });
+        return;
+      }
+    }
   },
 
   build() {
-    console.log('[Timer] build');
+    console.log('[Timer] build, mode:', ts.mode, 'completed:', ts.isCompleted);
 
-    const config = state.gameConfig;
-    const isReady = state.seconds >= config.ENCOUNTER_THRESHOLD;
-
-    // ========== BACKGROUND ==========
+    // ── Background ──
     hmUI.createWidget(hmUI.widget.FILL_RECT, {
       x: 0,
       y: 0,
       w: DEVICE_WIDTH,
-      h: DEVICE_HEIGHT,
+      h: 480,
       color: COLORS.bg,
     });
 
-    // ========== PROGRESS ARC ==========
-    // Background track (very dark green)
-    hmUI.createWidget(hmUI.widget.ARC, {
-      x: 0,
-      y: 0,
-      w: DEVICE_WIDTH,
-      h: DEVICE_HEIGHT,
-      start_angle: 0,
-      end_angle: 360,
-      color: COLORS.ring.track,
-      line_width: 8,
-    });
+    // ── Dashed progress ring ──
+    buildDashRing();
 
-    // Progress arc (blue → green when ready)
-    const progress = Math.min(state.seconds / config.ENCOUNTER_THRESHOLD, 1);
-    const endAngle = -90 + progress * 360;
+    // ── Running state widgets ──
+    buildRunningState();
 
-    state.widgets.progressArc = hmUI.createWidget(hmUI.widget.ARC, {
-      x: 0,
-      y: 0,
-      w: DEVICE_WIDTH,
-      h: DEVICE_HEIGHT,
-      start_angle: -90,
-      end_angle: endAngle,
-      color: isReady ? COLORS.ring.ready : COLORS.ring.progress,
-      line_width: 8,
-    });
-
-    // ========== CURRENT TIME ==========
-    state.widgets.clock = hmUI.createWidget(hmUI.widget.TEXT, {
-      x: 0,
-      y: 45,
-      w: DEVICE_WIDTH,
-      h: 30,
-      text: getCurrentTime(),
-      text_size: 24,
-      color: COLORS.text.muted,
-      align_h: hmUI.align.CENTER_H,
-    });
-
-    // ========== TITLE ==========
-    hmUI.createWidget(hmUI.widget.TEXT, {
-      x: 0,
-      y: 85,
-      w: DEVICE_WIDTH,
-      h: 40,
-      text: 'Focus',
-      text_size: 32,
-      color: COLORS.text.primary,
-      align_h: hmUI.align.CENTER_H,
-    });
-
-    // ========== TIMER DISPLAY ==========
-    state.widgets.timer = hmUI.createWidget(hmUI.widget.TEXT, {
-      x: 0,
-      y: 135,
-      w: DEVICE_WIDTH,
-      h: 90,
-      text: formatTime(state.seconds),
-      text_size: 80,
-      color: COLORS.text.primary,
-      align_h: hmUI.align.CENTER_H,
-    });
-
-    // ========== COINS EARNED (White) ==========
-    state.widgets.coins = hmUI.createWidget(hmUI.widget.TEXT, {
-      x: 0,
-      y: 240,
-      w: DEVICE_WIDTH,
-      h: 36,
-      text: `+${calcCoins(state.seconds)}`,
-      text_size: 32,
-      color: COLORS.text.primary,
-      align_h: hmUI.align.CENTER_H,
-    });
-
-    // ========== STATUS TEXT ==========
-    const remaining = config.ENCOUNTER_THRESHOLD - state.seconds;
-    state.widgets.status = hmUI.createWidget(hmUI.widget.TEXT, {
-      x: 0,
-      y: 295,
-      w: DEVICE_WIDTH,
-      h: 36,
-      text: isReady ? 'Catch ready!' : formatRemaining(remaining),
-      text_size: 28,
-      color: isReady ? COLORS.ring.ready : COLORS.text.muted,
-      align_h: hmUI.align.CENTER_H,
-    });
-
-    // ========== STOP BUTTON ==========
-    const btnSize = 76; // Large button
-    const iconSize = 56; // Much larger icon
-    const btnY = DEVICE_HEIGHT - 120;
-
-    // Button background
-    hmUI.createWidget(hmUI.widget.FILL_RECT, {
-      x: CX - btnSize / 2,
-      y: btnY,
-      w: btnSize,
-      h: btnSize,
-      radius: btnSize / 2,
-      color: COLORS.button.bg,
-    });
-
-    // X icon - perfectly centered in button with scaling
-    hmUI.createWidget(hmUI.widget.IMG, {
-      x: CX - iconSize / 2,
-      y: btnY + (btnSize - iconSize) / 2,
-      w: iconSize,
-      h: iconSize,
-      src: 'raw/icons/x.png',
-      auto_scale: true,
-      auto_scale_obj_fit: 1, // Fit within bounds
-    });
-
-    // Touch area (larger for easier tapping)
-    hmUI
-      .createWidget(hmUI.widget.FILL_RECT, {
-        x: CX - btnSize / 2 - 16,
-        y: btnY - 16,
-        w: btnSize + 32,
-        h: btnSize + 32,
-        color: 0x000000,
-        alpha: 0,
-      })
-      .addEventListener(hmUI.event.CLICK_UP, () => {
-        console.log('[Timer] Stop clicked');
-        endSession();
-      });
-
-    // Update UI and start timer
-    updateUI();
-    startTimer();
+    if (ts.isCompleted) {
+      // Recovered after already completing — show completion state directly
+      setCancelVisible(false);
+      buildCompletionOverlay();
+    } else {
+      startTick();
+    }
   },
 
   onShow() {
     console.log('[Timer] onShow');
-    state.seconds = calcElapsedSeconds();
-    updateUI();
-    startTimer();
+    if (!ts.isCompleted) {
+      updateRunningUI();
+      startTick();
+    }
   },
 
   onHide() {
     console.log('[Timer] onHide');
-    stopTimer();
+    stopTick();
   },
 
   onDestroy() {
     console.log('[Timer] onDestroy');
-    stopTimer();
-    // Note: Don't stop the service here - it should keep running!
+    stopTick();
+    stopVibrations();
+    timeSensor = null;
+    totalDurationWidget = null;
+    // Note: don't stop the service here — it should keep running for focus mode
   },
 });

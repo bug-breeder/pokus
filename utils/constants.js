@@ -107,15 +107,13 @@ const GAME_BASE = {
 // Normal mode config
 const GAME_NORMAL = {
   ...GAME_BASE,
-  ENCOUNTER_THRESHOLD: 300, // 5 minutes (300 seconds) to trigger encounter
-  COINS_PER_BLOCK: 1, // 1 coin per 5-minute block completed
+  COIN_BLOCK_SECONDS: 300, // earn 1 coin per 5-minute block of focus
 };
 
 // Developer mode config (faster testing)
 const GAME_DEV = {
   ...GAME_BASE,
-  ENCOUNTER_THRESHOLD: 1, // 1 second for quick testing
-  COINS_PER_BLOCK: 1, // Same coin rate
+  COIN_BLOCK_SECONDS: 5, // earn 1 coin per 5-second block (matches encounter threshold)
 };
 
 /**
@@ -129,3 +127,24 @@ export function getGameConfig() {
 // Legacy export for backwards compatibility (uses normal config)
 // NOTE: Prefer getGameConfig() for dynamic mode support
 export const GAME = GAME_NORMAL;
+
+// =============================================================================
+// TIMER MODE PRESETS
+// =============================================================================
+
+export const DEFAULT_FOCUS_SECONDS = 300;
+export const DEFAULT_BREAK_SECONDS = 300;
+export const FOCUS_PRESET_MINUTES = [5, 10, 15, 20, 25, 30];
+export const BREAK_PRESET_MINUTES = [5, 10, 15];
+
+// Accumulated focus thresholds for Pokemon encounter trigger
+const ENCOUNTER_ACCUMULATED_NORMAL = 3600; // 1 hour
+const ENCOUNTER_ACCUMULATED_DEV = 5; // 5s for dev mode testing
+
+/**
+ * Get required accumulated focus seconds to trigger a Pokemon encounter
+ * @returns {number} Seconds of focus needed
+ */
+export function getEncounterThreshold() {
+  return isDevMode() ? ENCOUNTER_ACCUMULATED_DEV : ENCOUNTER_ACCUMULATED_NORMAL;
+}

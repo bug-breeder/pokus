@@ -52,12 +52,21 @@ function getKey(baseKey) {
 
 /**
  * Check if a focus session is currently active
+ * Supports both new shape (mode + endTime) and legacy shape (startTime only)
  */
 function isSessionActive() {
   try {
     const key = getKey(TIMER_STATE_KEY);
     const state = storage.getItem(key, null);
-    return !!(state && state.startTime && state.isRunning !== false);
+    if (!state || state.isRunning === false) return false;
+    // Break sessions don't need background monitoring
+    if (state.mode === 'break') return false;
+    // New shape: check endTime is in the future
+    if (state.endTime) {
+      return Date.now() < state.endTime;
+    }
+    // Legacy shape: just check startTime exists
+    return !!state.startTime;
   } catch (e) {
     logger.log('isSessionActive error:', e);
     return false;

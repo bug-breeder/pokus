@@ -18,6 +18,8 @@ const KEYS = {
   TOTAL_FOCUS_TIME: 'pokus_total_focus',
   TIMER_STATE: 'pokus_timer_state',
   NUDGE_ALARM_ID: 'pokus_nudge_alarm',
+  ACCUMULATED_FOCUS: 'pokus_accumulated_focus', // Accumulated focus for encounter trigger
+  RECENT_TIMERS: 'pokus_recent_timers', // Recent timer durations shared across modes (array of seconds, max 4)
   // Settings keys (shared across modes)
   SETTINGS_FOCUS_GOAL: 'pokus_focus_goal',
   SETTINGS_NUDGE_ENABLED: 'pokus_nudge_enabled',
@@ -377,18 +379,24 @@ export function getTimerState() {
 }
 
 /**
- * Save timer state (start timestamp and running flag)
- * @param {Object} timerState - { startTime: number, isRunning: boolean }
+ * Save timer state
+ * @param {Object} timerState - { mode, startTime, endTime, durationSeconds, baseBreakSeconds, canExtend, isRunning }
  */
 export function saveTimerState(timerState) {
   try {
-    // Ensure isRunning defaults to true if not specified
     const state = {
-      startTime: timerState.startTime,
+      ...timerState,
       isRunning: timerState.isRunning !== false,
     };
     storage.setItem(getKey(KEYS.TIMER_STATE), state);
-    console.log('saveTimerState:', state.startTime, 'running:', state.isRunning);
+    console.log(
+      'saveTimerState: mode=',
+      state.mode,
+      'endTime=',
+      state.endTime,
+      'running:',
+      state.isRunning
+    );
   } catch (e) {
     console.log('saveTimerState error:', e);
   }
@@ -416,6 +424,92 @@ export function isTimerRunning() {
     return !!(state && state.startTime && state.isRunning !== false);
   } catch {
     return false;
+  }
+}
+
+// =============================================================================
+// ACCUMULATED FOCUS (for Pokemon encounter trigger)
+// =============================================================================
+
+/**
+ * Get accumulated focus seconds (counts toward encounter trigger)
+ * @returns {number}
+ */
+export function getAccumulatedFocus() {
+  try {
+    const val = storage.getItem(getKey(KEYS.ACCUMULATED_FOCUS), 0);
+    return typeof val === 'number' ? val : 0;
+  } catch (e) {
+    console.log('getAccumulatedFocus error:', e);
+    return 0;
+  }
+}
+
+/**
+ * Add focus seconds to accumulated total
+ * @param {number} seconds
+ */
+export function addAccumulatedFocus(seconds) {
+  try {
+    const current = getAccumulatedFocus();
+    storage.setItem(getKey(KEYS.ACCUMULATED_FOCUS), current + seconds);
+    console.log('addAccumulatedFocus:', seconds, 'total:', current + seconds);
+  } catch (e) {
+    console.log('addAccumulatedFocus error:', e);
+  }
+}
+
+/**
+ * Deduct focus seconds from accumulated total (called when encounter is triggered)
+ * @param {number} seconds
+ */
+export function deductAccumulatedFocus(seconds) {
+  try {
+    const current = getAccumulatedFocus();
+    const newVal = Math.max(0, current - seconds);
+    storage.setItem(getKey(KEYS.ACCUMULATED_FOCUS), newVal);
+    console.log('deductAccumulatedFocus:', seconds, 'remaining:', newVal);
+  } catch (e) {
+    console.log('deductAccumulatedFocus error:', e);
+  }
+}
+
+// =============================================================================
+// RECENT TIMERS (for timer-select screen)
+// =============================================================================
+
+/**
+ * Get recent timer durations (shared across focus and break)
+ * @returns {number[]} Array of seconds (most recent first, max 3)
+ */
+export function getRecentTimers() {
+  try {
+    const val = storage.getItem(getKey(KEYS.RECENT_TIMERS), []);
+    if (!Array.isArray(val)) return [];
+    return val.filter((s) => typeof s === 'number' && Number.isFinite(s) && s > 0);
+  } catch (e) {
+    console.log('getRecentTimers error:', e);
+    return [];
+  }
+}
+
+/**
+ * Save a timer duration to the shared recent list
+ * Deduplicates and keeps most recent first, max 3 entries
+ * @param {number} seconds
+ */
+export function saveRecentTimer(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return;
+  try {
+    const existing = getRecentTimers();
+    // Deduplicate: remove if already in list
+    const filtered = existing.filter((s) => s !== seconds);
+    // Prepend new entry, keep max 4
+    const updated = [seconds, ...filtered].slice(0, 4);
+    storage.setItem(getKey(KEYS.RECENT_TIMERS), updated);
+    console.log('saveRecentTimer:', seconds, 'list:', updated);
+  } catch (e) {
+    console.log('saveRecentTimer error:', e);
   }
 }
 
@@ -599,6 +693,10 @@ export function resetAllProgress() {
     // Clear timer state
     storage.setItem(getKey(KEYS.TIMER_STATE), null);
     storage.setItem(getKey(KEYS.NUDGE_ALARM_ID), null);
+
+    // Clear accumulated focus and recent timers
+    storage.setItem(getKey(KEYS.ACCUMULATED_FOCUS), 0);
+    storage.setItem(getKey(KEYS.RECENT_TIMERS), []);
 
     console.log('resetAllProgress: All progress data cleared for', mode, 'mode');
   } catch (e) {
