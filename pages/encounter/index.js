@@ -504,6 +504,21 @@ Page({
     state.cursorTimerId = setInterval(animateCursor, state.gameConfig.TIMING_ANIM_INTERVAL);
     state.bounceTimerId = setInterval(animateBounce, 16); // ~60fps for smooth bounce
 
+    // Full-screen transparent overlay — must be last (topmost) so it catches touches
+    // that start over any widget (pokeball, timing bar) where onGesture won't fire.
+    hmUI
+      .createWidget(hmUI.widget.FILL_RECT, {
+        x: 0,
+        y: 0,
+        w: DEVICE_WIDTH,
+        h: DEVICE_HEIGHT,
+        color: 0x000000,
+        alpha: 0,
+      })
+      .addEventListener(hmUI.event.CLICK_UP, () => {
+        throwPokeball();
+      });
+
     // Register swipe up
     onGesture({
       callback: (gesture) => {
